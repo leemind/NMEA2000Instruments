@@ -18,6 +18,100 @@ static char can_data[2 * 1024] = {0};  // Buffer for receiving data
 static cJSON *pgn_database = NULL;  // Global PGN database
 static const char *TAG = "CAN_DECODER";
 
+/* Forward declaration — defined later in this file */
+static void img_angle_anim_cb(void *obj, int32_t angle);
+
+/* -----------------------------------------------------------------------
+ * Cached values for True Wind computation.
+ * Written only from the CAN task (single-threaded), so no extra mutex.
+ * -------------------------------------------------------------------- */
+static float g_aws_kts  = 0.0f;   /* Apparent Wind Speed in knots       */
+static float g_awa_deg  = 0.0f;   /* Apparent Wind Angle in degrees 0-360 */
+static float g_sog_kts  = 0.0f;   /* Speed Over Ground in knots         */
+static bool  g_aws_valid = false;
+static bool  g_awa_valid = false;
+static bool  g_sog_valid = false;
+
+/**
+ * @brief Compute True Wind Speed/Angle from cached AWS, AWA and SOG,
+ *        then animate the TruePointer to the new TWA.
+ *
+ * Vector decomposition (boat frame, x=stbd+, y=fwd+):
+ *   TWx = AWS * sin(AWA)
+ *   TWy = AWS * cos(AWA) - SOG
+ *   TWS = sqrt(TWx^2 + TWy^2)
+ *   TWA = atan2(TWx, TWy)   (negative = starboard, positive = port)
+ *
+ * MUST be called while already holding lvgl_port_lock.
+ */
+static void compute_true_wind(void)
+{
+    if (!g_aws_valid || !g_awa_valid || !g_sog_valid) return;
+
+    /* Convert AWA to signed radians: port = +, starboard = - */
+    float awa_signed_deg = g_awa_deg;
+    if (awa_signed_deg > 180.0f) awa_signed_deg -= 360.0f;
+    float awa_rad = awa_signed_deg * ((float)M_PI / 180.0f);
+
+    float tw_x = g_aws_kts * sinf(awa_rad);
+    float tw_y = g_aws_kts * cosf(awa_rad) - g_sog_kts;
+
+    float tws = sqrtf(tw_x * tw_x + tw_y * tw_y);
+    float twa_rad = atan2f(tw_x, tw_y);          /* signed: + = port */
+    float twa_deg = twa_rad * (180.0f / (float)M_PI);
+
+    /* Normalise TWA to 0-360 (port side 0-180, starboard 180-360) */
+    if (twa_deg < 0.0f) twa_deg += 360.0f;
+
+    ESP_LOGD(TAG, "TWS=%.1f kts  TWA=%.1f deg", tws, twa_deg);
+
+    /* --- LHS1: True Wind Speed --- */
+    char tws_buf[8];
+    snprintf(tws_buf, sizeof(tws_buf), "%.1f", tws);
+    if (uic_LHS1_DBValue) lv_label_set_text(uic_LHS1_DBValue, tws_buf);
+    if (uic_LHS1_DBLabel) lv_label_set_text(uic_LHS1_DBLabel, "TWS");
+    if (uic_LHS1_DBUnit)  lv_label_set_text(uic_LHS1_DBUnit,  "kts");
+
+    /* --- LHS2: True Wind Angle (P/S notation) --- */
+    char twa_buf[10];
+    if (twa_deg < 180.0f) {
+        snprintf(twa_buf, sizeof(twa_buf), "P %03.0f", twa_deg);
+    } else {
+        snprintf(twa_buf, sizeof(twa_buf), "S %03.0f", 360.0f - twa_deg);
+    }
+    if (uic_LHS2_DBValue) lv_label_set_text(uic_LHS2_DBValue, twa_buf);
+    if (uic_LHS2_DBLabel) lv_label_set_text(uic_LHS2_DBLabel, "TWA");
+    if (uic_LHS2_DBUnit)  lv_label_set_text(uic_LHS2_DBUnit,  "deg");
+
+    /* Rotate TruePointer — same formula and animation as ApparantPointer */
+    if (ui_TruePointer) {
+        int32_t tgt = (int32_t)((360.0f - twa_deg) * 10.0f);
+        tgt = ((tgt % 3600) + 3600) % 3600;
+
+        int32_t cur = (int32_t)lv_img_get_angle(ui_TruePointer);
+
+        int32_t dlt = tgt - cur;
+        if (dlt >  1800) dlt -= 3600;
+        if (dlt < -1800) dlt += 3600;
+
+        lv_anim_del(ui_TruePointer, NULL);
+
+        uint32_t ms = (uint32_t)(abs(dlt) * 1000 / 600);
+        if (ms < 150) ms = 150;
+        if (ms > 600) ms = 600;
+
+        lv_anim_t t;
+        lv_anim_init(&t);
+        lv_anim_set_var(&t, ui_TruePointer);
+        lv_anim_set_exec_cb(&t, img_angle_anim_cb);
+        lv_anim_set_values(&t, cur, cur + dlt);
+        lv_anim_set_time(&t, ms);
+        lv_anim_set_path_cb(&t, lv_anim_path_linear);
+        lv_anim_start(&t);
+    }
+}
+
+
 /**
  * @brief Extract PGN number from NMEA2000 CAN identifier
  * 
@@ -197,6 +291,12 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len)
             snprintf(ang_buf, sizeof(ang_buf), "S %03.0f", 360.0f - angle_deg);
         }
 
+        /* Cache apparent wind for True Wind computation */
+        g_aws_kts  = speed_kts;
+        g_awa_deg  = angle_deg;
+        g_aws_valid = true;
+        g_awa_valid = true;
+
         if (lvgl_port_lock(100)) {
             if (ui_AWS) {
                 lv_label_set_text(ui_AWS, spd_buf);
@@ -234,6 +334,56 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len)
                 lv_anim_start(&p);
             }
 
+            /* Recompute true wind with updated apparent wind */
+            compute_true_wind();
+
+            lvgl_port_unlock();
+        }
+        break;
+    }
+
+    case 129026: {
+        /* COG & SOG, Rapid Update
+         * Byte 0     : SID
+         * Bytes 1    : COG Reference (2 bits) + Reserved (6 bits)
+         * Bytes 2-3  : COG, uint16 LE, 0.0001 rad/LSB
+         * Bytes 4-5  : SOG, uint16 LE, 0.01 m/s/LSB
+         */
+        if (data_len < 6) break;
+
+        uint16_t cog_raw = (uint16_t)data[2] | ((uint16_t)data[3] << 8);
+        uint16_t sog_raw = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
+        if (sog_raw == 0xFFFFU) break;
+
+        g_sog_kts   = (float)sog_raw * 0.01f * 1.94384f;
+        g_sog_valid = true;
+
+        /* SOG string */
+        char sog_buf[8];
+        snprintf(sog_buf, sizeof(sog_buf), "%.1f", g_sog_kts);
+
+        /* COG string (degrees, 0-360) */
+        char cog_buf[8];
+        if (cog_raw != 0xFFFFU) {
+            float cog_deg = (float)cog_raw * 0.0001f * (180.0f / (float)M_PI);
+            while (cog_deg >= 360.0f) cog_deg -= 360.0f;
+            snprintf(cog_buf, sizeof(cog_buf), "%03.0f", cog_deg);
+        } else {
+            snprintf(cog_buf, sizeof(cog_buf), "---");
+        }
+
+        /* Recompute true wind with updated SOG, and update RHS1/RHS2 databoxes */
+        if (lvgl_port_lock(100)) {
+            /* RHS1 = SOG */
+            if (uic_DBValue)       lv_label_set_text(uic_DBValue,       sog_buf);
+            if (uic_RHS1_DBLabel)  lv_label_set_text(uic_RHS1_DBLabel,  "SOG");
+            if (uic_RHS1_DBUnit)   lv_label_set_text(uic_RHS1_DBUnit,   "kts");
+            /* RHS2 = COG */
+            if (uic_RHS2_DBValue)  lv_label_set_text(uic_RHS2_DBValue,  cog_buf);
+            if (uic_RHS2_DBLabel)  lv_label_set_text(uic_RHS2_DBLabel,  "COG");
+            if (uic_RHS2_DBUnit)   lv_label_set_text(uic_RHS2_DBUnit,   "deg");
+
+            compute_true_wind();
             lvgl_port_unlock();
         }
         break;
