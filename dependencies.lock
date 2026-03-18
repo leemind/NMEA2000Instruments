@@ -1,0 +1,17 @@
+dependencies:
+  idf:
+    source:
+      type: idf
+    version: 5.5.3
+  lvgl/lvgl:
+    dependencies: []
+    source:
+      path: /Users/david/Downloads/ESP32-S3-Touch-LCD-7B-Demo/ESP-IDF/16_LVGL_UI/components/lvgl_port/lvgl__lvgl
+      type: local
+    version: 8.4.0
+direct_dependencies:
+- idf
+- lvgl/lvgl
+manifest_hash: 117ced8322af7760089da23fb3c5192e275d0a212b0938d31ecb057b653a5cef
+target: esp32s3
+version: 2.0.0
