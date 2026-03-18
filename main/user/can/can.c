@@ -193,7 +193,7 @@ void can_update_textarea_cb(lv_timer_t * timer) {
 void can_task(void *arg)
 {
     // Load PGN database on startup
-    const char *db_path = "/sdcard/PGNS/NMEA_database_1_300.json";
+    const char *db_path = "/littlefs/PGNS/NMEA_database_1_300.json";
     pgn_database = pgn_json_load(db_path);
     
     if (!pgn_database) {

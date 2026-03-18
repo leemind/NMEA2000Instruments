@@ -3,15 +3,26 @@ dependencies:
     source:
       type: idf
     version: 5.5.3
+  joltwallet/littlefs:
+    component_hash: dcea25bcef2de023f089f5f01e8d8c46ad1b8ffef75861ad5ffb4098555839df
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.20.4
   lvgl/lvgl:
     dependencies: []
     source:
-      path: /Users/david/Downloads/ESP32-S3-Touch-LCD-7B-Demo/ESP-IDF/16_LVGL_UI/components/lvgl_port/lvgl__lvgl
+      path: /Users/david/Development_Local/ESP-IDF/NMEA2000Instruments/components/lvgl_port/lvgl__lvgl
       type: local
     version: 8.4.0
 direct_dependencies:
 - idf
+- joltwallet/littlefs
 - lvgl/lvgl
-manifest_hash: 117ced8322af7760089da23fb3c5192e275d0a212b0938d31ecb057b653a5cef
+manifest_hash: aea011ebcc92c24032e4daab5b53cf70f6f5c24edae96bec7befdd874484c001
 target: esp32s3
 version: 2.0.0

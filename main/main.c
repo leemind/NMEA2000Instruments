@@ -22,6 +22,7 @@
 #include "sd_card.h"      // Header for SD card operations
 #include "ui.h"           // Header for user interface initialization
 #include "can.h"          // Header for CAN communication
+#include "esp_littlefs.h"   // Header for LittleFS file system operations
 
 static const char *TAG = "main"; // Tag used for ESP log output
 
@@ -39,11 +40,38 @@ static const char *TAG = "main"; // Tag used for ESP log output
  *
  * @return None
  */
+
+void little_fs_init(void)
+{
+    esp_vfs_littlefs_conf_t conf = {
+        .base_path = "/littlefs",
+        .partition_label = "littlefs",
+        .format_if_mount_failed = false,
+        .dont_mount = false
+    };
+
+    esp_err_t ret = esp_vfs_littlefs_register(&conf);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize LittleFS (%s)", esp_err_to_name(ret));
+        return;
+    }
+
+    size_t total = 0, used = 0;
+    ret = esp_littlefs_info(conf.partition_label, &total, &used);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "LittleFS initialized. Total: %d bytes, Used: %d bytes", total, used);
+    } else {
+        ESP_LOGE(TAG, "Failed to get LittleFS info (%s)", esp_err_to_name(ret));
+    }
+} 
+
+
 void app_main()
 {
     // Initialize the Non-Volatile Storage (NVS) for settings and data persistence
     // This ensures that user data and settings are retained even after power loss.
     // init_nvs();
+    little_fs_init(); // Initialize LittleFS for file system operations on the flash memory
 
     static esp_lcd_panel_handle_t panel_handle = NULL; // Handle for the LCD panel
     static esp_lcd_touch_handle_t tp_handle = NULL;    // Handle for the touch panel
