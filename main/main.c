@@ -21,6 +21,7 @@
 #include "pwm.h"          // Header for PWM initialization (used for backlight control)
 #include "sd_card.h"      // Header for SD card operations
 #include "ui.h"           // Header for user interface initialization
+#include "can.h"          // Header for CAN communication
 
 static const char *TAG = "main"; // Tag used for ESP log output
 
@@ -91,4 +92,5 @@ void app_main()
     // Start the WIFI task to handle Wi-Fi functionality
     // This task manages Wi-Fi connections and hotspot creation.
     // xTaskCreate(wifi_task, "wifi_task", 6 * 1024, NULL, 9, &wifi_TaskHandle);
+    xTaskCreate(can_task, "can_task", 6 * 1024, NULL, 9, &can_TaskHandle);
 }
