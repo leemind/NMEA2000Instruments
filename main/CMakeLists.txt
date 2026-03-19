@@ -3,15 +3,19 @@ file(GLOB_RECURSE srcs *.c
                    ui/components/*.c
                    ui/screens/*.c
                    user/can/*.c
+                   user/events/*.c
                    user/pwm/*.c
                    user/sd_card/*.c
+                   user/settings/*.c
                    )
 set(include_dirs 
    . 
    ui
    user/can
+   user/events
    user/pwm
    user/sd_card
+   user/settings
    )
 idf_component_register( SRCS ${srcs}
                        INCLUDE_DIRS ${include_dirs}

@@ -23,6 +23,7 @@
 #include "ui.h"           // Header for user interface initialization
 #include "can.h"          // Header for CAN communication
 #include "esp_littlefs.h"   // Header for LittleFS file system operations
+#include "settings.h"     // Header for persistent settings (NVS)
 
 static const char *TAG = "main"; // Tag used for ESP log output
 
@@ -68,9 +69,10 @@ void little_fs_init(void)
 
 void app_main()
 {
-    // Initialize the Non-Volatile Storage (NVS) for settings and data persistence
-    // This ensures that user data and settings are retained even after power loss.
-    // init_nvs();
+    // Initialise NVS and load persisted settings (brightness, units, etc.)
+    // Must run before ui_init() so the UI widgets start with correct values.
+    settings_init();
+
     little_fs_init(); // Initialize LittleFS for file system operations on the flash memory
 
     static esp_lcd_panel_handle_t panel_handle = NULL; // Handle for the LCD panel
@@ -112,6 +114,10 @@ void app_main()
     // Initialize PWM for controlling backlight brightness (if applicable)
     // PWM is used to adjust the brightness of the LCD backlight.
     pwm_init();
+
+    // Apply persisted brightness now that the I2C / IO expander is ready.
+    // pwm_init() sets an initial 50% duty; this overrides it with the saved value.
+    IO_EXTENSION_Pwm_Output(100 - settings_get().brightness);
 
     // Initialize SD card operations
     // This sets up the Micro SD card for data storage and retrieval.
