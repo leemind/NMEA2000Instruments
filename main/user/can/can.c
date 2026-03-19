@@ -389,6 +389,41 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len)
         break;
     }
 
+    case 128267: {
+        /* Water Depth
+         * Byte 0     : SID
+         * Bytes 1-4  : Depth (transducer), uint32 LE, 0.01 m/LSB
+         * Bytes 5-6  : Offset, int16 LE, 0.001 m/LSB (+ve = below transducer)
+         *
+         * True depth  =  transducer depth + offset
+         * Display in metres, 1 decimal place.
+         */
+        if (data_len < 7) break;
+
+        uint32_t dep_raw = (uint32_t)data[1]
+                         | ((uint32_t)data[2] << 8)
+                         | ((uint32_t)data[3] << 16)
+                         | ((uint32_t)data[4] << 24);
+
+        if (dep_raw == 0xFFFFFFFFU) break;
+
+        int16_t off_raw = (int16_t)((uint16_t)data[5] | ((uint16_t)data[6] << 8));
+
+        float depth_m  = (float)dep_raw * 0.01f
+                       + (float)off_raw * 0.001f;
+
+        char dep_buf[8];
+        snprintf(dep_buf, sizeof(dep_buf), "%.1f", depth_m);
+
+        if (lvgl_port_lock(100)) {
+            if (uic_RHS3_DBValue) lv_label_set_text(uic_RHS3_DBValue, dep_buf);
+            if (uic_RHS3_DBLabel) lv_label_set_text(uic_RHS3_DBLabel, "DPT");
+            if (uic_RHS3_DBUnit)  lv_label_set_text(uic_RHS3_DBUnit,  "m");
+            lvgl_port_unlock();
+        }
+        break;
+    }
+
     /* ---------------------------------------------------------------
      * Future fixed PGNs — add cases here, e.g.:
      *   case 127251:  // Rate of Turn
