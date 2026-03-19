@@ -11,14 +11,21 @@ static const char *KEY_BRIGHT = "brightness";
 static const char *KEY_DEPTH  = "depth_unit";
 static const char *KEY_WIND   = "wind_unit";
 static const char *KEY_AUTODEPTH = "autodepth_value";
+static const char *KEY_USE_TRANSDUCER_OFFSET = "use_transducer_offset";
 
 /* In-memory copy — written once on init, updated by every setter */
 static app_settings_t s_settings = {
     .brightness = SETTINGS_DEFAULT_BRIGHTNESS,
     .depth_unit = SETTINGS_DEFAULT_DEPTH_UNIT,
     .wind_unit  = SETTINGS_DEFAULT_WIND_UNIT,
-    .autodepth_value = SETTINGS_DEFAULT_AUTODEPTH_VALUE
+    .autodepth_value = SETTINGS_DEFAULT_AUTODEPTH_VALUE,
+    .use_transducer_offset = SETTINGS_DEFAULT_USE_TRANSDUCER_OFFSET
 };
+
+const double wind_convert[4]     = {1.94384, 2.23694, 1.0, 3.6};
+const char   wind_unit_str[4][4] = {"kts", "mph", "m/s", "kph"};
+const double depth_convert[2]    = {1.0, 3.28084};
+const char   depth_unit_str[2][4] = {"m", "ft"};
 
 /* -----------------------------------------------------------------------
  * Internal helpers
@@ -170,5 +177,16 @@ void settings_set_autodepth_value(uint8_t value)
     nvs_commit(h);
     nvs_close(h);
     ESP_LOGD(TAG, "autodepth_value -> %d (saved)", value);
+}
+
+void settings_set_use_transducer_offset(bool value) {
+    s_settings.use_transducer_offset = value;
+
+    nvs_handle_t h = open_nvs();
+    if (!h) return;
+    nvs_set_u8(h, KEY_USE_TRANSDUCER_OFFSET, (uint8_t)value);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGD(TAG, "use_transducer_offset -> %d (saved)", (int)value);
 }
 

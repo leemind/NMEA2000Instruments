@@ -11,6 +11,7 @@
 #include "pgn_json_parser.h"  // Include PGN parser for decoding NMEA2000 messages
 #include "lvgl_port.h"        // LVGL mutex for thread-safe UI access from CAN task
 #include "screens/ui_Wind.h"  // UI objects (ui_Heading, ui_AWS, etc.)
+#include "settings.h"       // settings_get_depth_unit() etc.
 
 TaskHandle_t can_TaskHandle;
 
@@ -25,7 +26,7 @@ static void img_angle_anim_cb(void *obj, int32_t angle);
  * Cached values for True Wind computation.
  * Written only from the CAN task (single-threaded), so no extra mutex.
  * -------------------------------------------------------------------- */
-static float g_aws_kts  = 0.0f;   /* Apparent Wind Speed in knots       */
+static float g_aws_ms  = 0.0f;   /* Apparent Wind Speed in m/s       */
 static float g_awa_deg  = 0.0f;   /* Apparent Wind Angle in degrees 0-360 */
 static float g_sog_kts  = 0.0f;   /* Speed Over Ground in knots         */
 static bool  g_aws_valid = false;
@@ -53,8 +54,8 @@ static void compute_true_wind(void)
     if (awa_signed_deg > 180.0f) awa_signed_deg -= 360.0f;
     float awa_rad = awa_signed_deg * ((float)M_PI / 180.0f);
 
-    float tw_x = g_aws_kts * sinf(awa_rad);
-    float tw_y = g_aws_kts * cosf(awa_rad) - g_sog_kts;
+    float tw_x = g_aws_ms * sinf(awa_rad);
+    float tw_y = g_aws_ms * cosf(awa_rad) - g_sog_kts;
 
     float tws = sqrtf(tw_x * tw_x + tw_y * tw_y);
     float twa_rad = atan2f(tw_x, tw_y);          /* signed: + = port */
@@ -63,14 +64,15 @@ static void compute_true_wind(void)
     /* Normalise TWA to 0-360 (port side 0-180, starboard 180-360) */
     if (twa_deg < 0.0f) twa_deg += 360.0f;
 
-    ESP_LOGD(TAG, "TWS=%.1f kts  TWA=%.1f deg", tws, twa_deg);
+    ESP_LOGD(TAG, "TWS=%.1f m/s  TWA=%.1f deg", tws, twa_deg);
 
+    app_settings_t settings = settings_get();
     /* --- LHS1: True Wind Speed --- */
     char tws_buf[8];
-    snprintf(tws_buf, sizeof(tws_buf), "%.1f", tws);
+    snprintf(tws_buf, sizeof(tws_buf), "%.1f", tws * wind_convert[settings.wind_unit]);
     if (uic_LHS1_DBValue) lv_label_set_text(uic_LHS1_DBValue, tws_buf);
     if (uic_LHS1_DBLabel) lv_label_set_text(uic_LHS1_DBLabel, "TWS");
-    if (uic_LHS1_DBUnit)  lv_label_set_text(uic_LHS1_DBUnit,  "kts");
+    if (uic_LHS1_DBUnit)  lv_label_set_text(uic_LHS1_DBUnit,  wind_unit_str[settings.wind_unit]);
 
     /* --- LHS2: True Wind Angle (P/S notation) --- */
     char twa_buf[10];
@@ -265,6 +267,8 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len)
          */
         if (data_len < 5) break;
 
+        app_settings_t settings = settings_get();
+
         uint16_t spd_raw = (uint16_t)data[1] | ((uint16_t)data[2] << 8);
         uint16_t dir_raw = (uint16_t)data[3] | ((uint16_t)data[4] << 8);
 
@@ -272,7 +276,7 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len)
         if (spd_raw == 0xFFFFU || dir_raw == 0xFFFFU) break;
 
         /* Speed: 0.01 m/s per LSB → knots (1 m/s = 1.94384 kts) */
-        float speed_kts = (float)spd_raw * 0.01f * 1.94384f;
+        float speed_ms = (float)spd_raw * 0.01f;
 
         /* Angle: 0.0001 rad per LSB → degrees */
         float angle_deg = (float)dir_raw * 0.0001f * (180.0f / (float)M_PI);
@@ -280,7 +284,7 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len)
 
         /* Speed string: 1 decimal place */
         char spd_buf[8];
-        snprintf(spd_buf, sizeof(spd_buf), "%.1f", speed_kts);
+        snprintf(spd_buf, sizeof(spd_buf), "%.1f", speed_ms * wind_convert[settings.wind_unit]);
 
         /* Angle string: P xxx (port, < 180°) or S yyy (starboard, ≥ 180°)
          * For starboard the displayed angle is the mirror: 360 - angle */
@@ -292,7 +296,7 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len)
         }
 
         /* Cache apparent wind for True Wind computation */
-        g_aws_kts  = speed_kts;
+        g_aws_ms  = speed_ms;
         g_awa_deg  = angle_deg;
         g_aws_valid = true;
         g_awa_valid = true;
@@ -300,6 +304,7 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len)
         if (lvgl_port_lock(100)) {
             if (ui_AWS) {
                 lv_label_set_text(ui_AWS, spd_buf);
+                lv_label_set_text(ui_AWSUnit, wind_unit_str[settings.wind_unit]);
             }
             if (ui_AWA) {
                 lv_label_set_text(ui_AWA, ang_buf);
@@ -409,16 +414,20 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len)
 
         int16_t off_raw = (int16_t)((uint16_t)data[5] | ((uint16_t)data[6] << 8));
 
-        float depth_m  = (float)dep_raw * 0.01f
-                       + (float)off_raw * 0.001f;
+        app_settings_t settings = settings_get();
+
+        float total_depth_raw = (float)dep_raw 
+                       + (settings.use_transducer_offset ? (float)off_raw * 10 : 0.0f);
+
+        float depth_user  = (float)total_depth_raw * depth_convert[settings.depth_unit];
 
         char dep_buf[8];
-        snprintf(dep_buf, sizeof(dep_buf), "%.1f", depth_m);
+        snprintf(dep_buf, sizeof(dep_buf), "%.1f", depth_user);
 
         if (lvgl_port_lock(100)) {
             if (uic_RHS3_DBValue) lv_label_set_text(uic_RHS3_DBValue, dep_buf);
-            if (uic_RHS3_DBLabel) lv_label_set_text(uic_RHS3_DBLabel, "DPT");
-            if (uic_RHS3_DBUnit)  lv_label_set_text(uic_RHS3_DBUnit,  "m");
+            if (uic_RHS3_DBLabel) lv_label_set_text(uic_RHS3_DBLabel, "DEPTH");
+            if (uic_RHS3_DBUnit)  lv_label_set_text(uic_RHS3_DBUnit,  depth_unit_str[settings.depth_unit]);
             lvgl_port_unlock();
         }
         break;

@@ -11,7 +11,9 @@
  */
 #include "ui.h"          /* pulls in lvgl and all screen headers */
 #include "settings.h"    /* settings_set_brightness() etc.       */
+#include "esp_log.h"     /* ESP_LOGI()                           */
 
+static const char *TAG       = "UI_EVENTS";
 /* ---------------------------------------------------------------------------
  * Brightness slider  (Settings screen)
  *
@@ -29,6 +31,7 @@ void set_brightness(lv_event_t *e)
 
     /* Applies brightness immediately via IO_EXTENSION_Pwm_Output()
      * and persists to NVS so the value survives a reboot. */
+    ESP_LOGI(TAG, "Brightness -> %d (saved)", (int)value);
     settings_set_brightness((uint8_t)value);
 }
 
@@ -41,8 +44,7 @@ void set_depth_unit(lv_event_t * e)
     if (value < 0)   value = 0;
     if (value > 1) value = 1;
 
-    /* Applies depth unit immediately via IO_EXTENSION_Pwm_Output()
-     * and persists to NVS so the value survives a reboot. */
+    ESP_LOGI(TAG, "Depth unit -> %d (saved)", (int)value);
     settings_set_depth_unit((uint8_t)value);
 }
 
@@ -57,6 +59,7 @@ void set_wind_unit(lv_event_t * e)
 
     /* Applies wind unit immediately via IO_EXTENSION_Pwm_Output()
      * and persists to NVS so the value survives a reboot. */
+    ESP_LOGI(TAG, "Wind unit -> %d (saved)", (int)value);
     settings_set_wind_unit((uint8_t)value);
 }
 
@@ -69,9 +72,19 @@ void set_autodepth_value(lv_event_t * e)
     if (value < 0)   value = 0;
     if (value > 1) value = 1;
 
-    /* Applies auto depth immediately via IO_EXTENSION_Pwm_Output()
-     * and persists to NVS so the value survives a reboot. */
+    
+    /* persists to NVS so the value survives a reboot. */
+    ESP_LOGI(TAG, "Auto depth value -> %d (saved)", (int)value);
     settings_set_autodepth_value((uint8_t)value);
+}
+
+void use_transducer_offset_value(lv_event_t * e)
+{
+    lv_obj_t *toggle = lv_event_get_target(e);
+    bool   value  = lv_obj_has_state(toggle, LV_STATE_CHECKED);
+
+    ESP_LOGI(TAG, "Use transducer offset -> %d (saved)", (int)value);
+    settings_set_use_transducer_offset(value);
 }
 
 void settings_screen_loaded(lv_event_t * e)
