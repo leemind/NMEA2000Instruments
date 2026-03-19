@@ -31,6 +31,7 @@ typedef struct {
     uint8_t      brightness;   /* Screen backlight duty cycle, 0-100        */
     depth_unit_t depth_unit;   /* DEPTH_METRES or DEPTH_FEET                */
     wind_unit_t  wind_unit;    /* WIND_KNOTS / WIND_MPH / WIND_MS / WIND_KPH */
+    uint8_t      autodepth_value; /* Auto depth value, 0-100                 */
 } app_settings_t;
 
 /* -----------------------------------------------------------------------
@@ -39,6 +40,7 @@ typedef struct {
 #define SETTINGS_DEFAULT_BRIGHTNESS  75
 #define SETTINGS_DEFAULT_DEPTH_UNIT  DEPTH_METRES
 #define SETTINGS_DEFAULT_WIND_UNIT   WIND_KNOTS
+#define SETTINGS_DEFAULT_AUTODEPTH_VALUE  0
 
 /* -----------------------------------------------------------------------
  * API
@@ -74,6 +76,8 @@ void settings_set_depth_unit(depth_unit_t unit);
  * @brief Set wind speed display unit and persist to NVS.
  */
 void settings_set_wind_unit(wind_unit_t unit);
+
+void settings_set_autodepth_value(uint8_t value);
 
 #ifdef __cplusplus
 }

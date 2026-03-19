@@ -10,12 +10,14 @@ static const char *NVS_NS    = "app_settings";  /* NVS namespace           */
 static const char *KEY_BRIGHT = "brightness";
 static const char *KEY_DEPTH  = "depth_unit";
 static const char *KEY_WIND   = "wind_unit";
+static const char *KEY_AUTODEPTH = "autodepth_value";
 
 /* In-memory copy — written once on init, updated by every setter */
 static app_settings_t s_settings = {
     .brightness = SETTINGS_DEFAULT_BRIGHTNESS,
     .depth_unit = SETTINGS_DEFAULT_DEPTH_UNIT,
     .wind_unit  = SETTINGS_DEFAULT_WIND_UNIT,
+    .autodepth_value = SETTINGS_DEFAULT_AUTODEPTH_VALUE
 };
 
 /* -----------------------------------------------------------------------
@@ -92,6 +94,15 @@ void settings_init(void)
         ESP_LOGW(TAG, "Error reading wind_unit: %s", esp_err_to_name(err));
     }
 
+    /* autodepth_value */
+    uint8_t av = (uint8_t)SETTINGS_DEFAULT_AUTODEPTH_VALUE;
+    err = nvs_get_u8(h, KEY_AUTODEPTH, &av);
+    if (err == ESP_OK) {
+        s_settings.autodepth_value = av;
+    } else if (err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "Error reading autodepth_value: %s", esp_err_to_name(err));
+    }
+
     nvs_close(h);
 
     ESP_LOGI(TAG, "Settings loaded — brightness=%d  depth=%s  wind=%s",
@@ -148,3 +159,16 @@ void settings_set_wind_unit(wind_unit_t unit)
     nvs_close(h);
     ESP_LOGD(TAG, "wind_unit -> %d (saved)", (int)unit);
 }
+
+void settings_set_autodepth_value(uint8_t value)
+{
+    s_settings.autodepth_value = value;
+
+    nvs_handle_t h = open_nvs();
+    if (!h) return;
+    nvs_set_u8(h, KEY_AUTODEPTH, value);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGD(TAG, "autodepth_value -> %d (saved)", value);
+}
+
