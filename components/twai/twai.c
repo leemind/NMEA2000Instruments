@@ -55,7 +55,7 @@ esp_err_t can_init(twai_timing_config_t t_config, twai_filter_config_t f_config,
     // Configure alerts for specific CAN events
     uint32_t alerts_to_enable = TWAI_ALERT_TX_SUCCESS | TWAI_ALERT_TX_FAILED |
                                 TWAI_ALERT_RX_DATA | TWAI_ALERT_RX_QUEUE_FULL |
-                                TWAI_ALERT_ERR_PASS | TWAI_ALERT_BUS_ERROR;
+                                TWAI_ALERT_ERR_PASS | TWAI_ALERT_BUS_ERROR | TWAI_ALERT_BUS_OFF;
     if (twai_reconfigure_alerts(alerts_to_enable, NULL) == ESP_OK)
     {
         ESP_LOGI(CAN_TAG, "CAN Alerts reconfigured"); // Log alert reconfiguration success
@@ -108,42 +108,47 @@ uint32_t can_read_alerts()
     if (alerts_triggered & TWAI_ALERT_ERR_PASS)
     {
         ESP_LOGI(CAN_TAG, "Alert: TWAI controller is in error passive state.");
-        return TWAI_ALERT_ERR_PASS;
+    }
+
+    if (alerts_triggered & TWAI_ALERT_BUS_OFF)
+    {
+        ESP_LOGI(CAN_TAG, "Alert: Bus-off state reached!");
     }
 
     if (alerts_triggered & TWAI_ALERT_BUS_ERROR)
     {
         ESP_LOGI(CAN_TAG, "Alert: Bus error occurred.");
         ESP_LOGI(CAN_TAG, "Bus error count: %" PRIu32, twaistatus.bus_error_count);
-        return TWAI_ALERT_BUS_ERROR;
+    }
+
+    if (alerts_triggered & (TWAI_ALERT_ERR_PASS | TWAI_ALERT_BUS_ERROR | TWAI_ALERT_BUS_OFF))
+    {
+        ESP_LOGE(CAN_TAG, "TWAI Metrics -> TEC: %" PRIu32 ", REC: %" PRIu32 ", RX Missed: %" PRIu32, 
+                 twaistatus.tx_error_counter, twaistatus.rx_error_counter, twaistatus.rx_missed_count);
     }
 
     if (alerts_triggered & TWAI_ALERT_TX_FAILED)
     {
         ESP_LOGI(CAN_TAG, "Alert: Transmission failed.");
         ESP_LOGI(CAN_TAG, "TX buffered: %" PRIu32, twaistatus.msgs_to_tx);
-        return TWAI_ALERT_TX_FAILED;
     }
 
     if (alerts_triggered & TWAI_ALERT_TX_SUCCESS)
     {
-        ESP_LOGI(CAN_TAG, "Alert: Transmission successful.");
-        return TWAI_ALERT_TX_SUCCESS;
+        // ESP_LOGI(CAN_TAG, "Alert: Transmission successful.");
     }
 
     if (alerts_triggered & TWAI_ALERT_RX_QUEUE_FULL)
     {
         ESP_LOGI(CAN_TAG, "Alert: RX queue full, frame lost.");
-        return TWAI_ALERT_RX_QUEUE_FULL;
     }
 
     if (alerts_triggered & TWAI_ALERT_RX_DATA)
     {
-        ESP_LOGI(CAN_TAG, "Alert: Read successful.");
-        return TWAI_ALERT_RX_DATA;
+        // Don't flood log on successful RX
     }
 
-    return 0;
+    return alerts_triggered;
 }
 
 /**

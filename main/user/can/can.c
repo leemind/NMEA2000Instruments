@@ -12,6 +12,7 @@
 #include "lvgl_port.h"        // LVGL mutex for thread-safe UI access from CAN task
 #include "screens/ui_Wind.h"  // UI objects (ui_Heading, ui_AWS, etc.)
 #include "settings.h"       // settings_get_depth_unit() etc.
+#include "can_debug_ui.h"   // CAN debug screen updates
 
 TaskHandle_t can_TaskHandle;
 
@@ -428,6 +429,23 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len)
             if (uic_RHS3_DBValue) lv_label_set_text(uic_RHS3_DBValue, dep_buf);
             if (uic_RHS3_DBLabel) lv_label_set_text(uic_RHS3_DBLabel, "DEPTH");
             if (uic_RHS3_DBUnit)  lv_label_set_text(uic_RHS3_DBUnit,  depth_unit_str[settings.depth_unit]);
+
+            /* Auto-Depth Screen Populating */
+            if (uic_DepthBig) lv_label_set_text(uic_DepthBig, dep_buf);
+            if (uic_BigDepthUnits) lv_label_set_text(uic_BigDepthUnits, depth_unit_str[settings.depth_unit]);
+
+            /* Auto-Depth Screen Switch Logic */
+            bool auto_depth_enabled = false;
+            if (uic_AutoDepthToggle) {
+                auto_depth_enabled = lv_obj_has_state(uic_AutoDepthToggle, LV_STATE_CHECKED);
+            }
+
+            if (auto_depth_enabled && settings.autodepth_value > 0 && depth_user < (float)settings.autodepth_value) {
+                if (lv_disp_get_scr_act(NULL) != ui_Depth) {
+                    _ui_screen_change(&ui_Depth, LV_SCR_LOAD_ANIM_FADE_ON, 500, 0, &ui_Depth_screen_init);
+                }
+            }
+
             lvgl_port_unlock();
         }
         break;
@@ -592,8 +610,9 @@ void can_task(void *arg)
     }
     
     // TWAI configuration settings for the CAN bus
-    static const twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();  // Set CAN bus speed to 500 kbps
-    static const twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();  // Accept all incoming CAN messages
+    twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
+    
+    static const twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
     static const twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(TX_GPIO_NUM, RX_GPIO_NUM, TWAI_MODE_NORMAL);  // General configuration, set TX/RX GPIOs and mode
     //lv_roller_set_selected(ui_CAN_Roller, 5, LV_ANIM_OFF);
     // Initialize the CAN communication interface
@@ -609,10 +628,13 @@ void can_task(void *arg)
     while (1)
     {
         alerts_triggered = can_read_alerts();  // Check for any triggered CAN bus alerts
+        can_debug_ui_update_status(alerts_triggered);
 
         // If new CAN data is received, process and display it
         if (alerts_triggered & TWAI_ALERT_RX_DATA) {
             message = can_read_Byte();  // Read the received CAN message
+            
+            can_debug_ui_update_msg(message.identifier, message.data, message.data_length_code);
 
             // Decode and print the PGN message to terminal
             if (pgn_database) {

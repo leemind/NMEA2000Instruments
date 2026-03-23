@@ -65,13 +65,8 @@ void set_wind_unit(lv_event_t * e)
 
 void set_autodepth_value(lv_event_t * e)
 {
-    lv_obj_t *dropdown = lv_event_get_target(e);
-    int32_t   value  = lv_dropdown_get_selected(dropdown);
-
-    /* Clamp just in case the dropdown range ever changes */
-    if (value < 0)   value = 0;
-    if (value > 1) value = 1;
-
+    lv_obj_t *roller = lv_event_get_target(e);
+    int32_t   value  = lv_roller_get_selected(roller);
     
     /* persists to NVS so the value survives a reboot. */
     ESP_LOGI(TAG, "Auto depth value -> %d (saved)", (int)value);
@@ -93,6 +88,6 @@ void settings_screen_loaded(lv_event_t * e)
     lv_slider_set_value(uic_BrightnessSlider, (int32_t)settings_get().brightness, LV_ANIM_OFF);
     lv_dropdown_set_selected(uic_DepthUnitChoice, (int32_t)settings_get().depth_unit);
     lv_dropdown_set_selected(uic_WindUnitsChoice, (int32_t)settings_get().wind_unit);
-    lv_dropdown_set_selected(uic_AutoDepthValue, (int32_t)settings_get().autodepth_value);
+    lv_roller_set_selected(uic_AutoDepthValue, (uint16_t)settings_get().autodepth_value, LV_ANIM_OFF);
 }
 

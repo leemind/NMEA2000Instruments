@@ -24,6 +24,7 @@
 #include "can.h"          // Header for CAN communication
 #include "esp_littlefs.h"   // Header for LittleFS file system operations
 #include "settings.h"     // Header for persistent settings (NVS)
+#include "can_debug_ui.h" // Header for dynamic CAN Debug UI init
 
 static const char *TAG = "main"; // Tag used for ESP log output
 
@@ -104,6 +105,9 @@ void app_main()
         // Initialize the UI components with LVGL (e.g., demo screens, sliders)
         // This sets up the user interface elements using the LVGL library.
         ui_init();
+
+        /* Initialize dynamic UI components NOT drawn in SquareLine */
+        can_debug_ui_init();
 
         // Release the mutex after LVGL operations are complete
         // This allows other tasks to access the LVGL port.
