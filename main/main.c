@@ -136,5 +136,5 @@ void app_main() {
   // Start the WIFI task to handle Wi-Fi functionality
   // This task manages Wi-Fi connections and hotspot creation.
   // xTaskCreate(wifi_task, "wifi_task", 6 * 1024, NULL, 9, &wifi_TaskHandle);
-  xTaskCreate(can_task, "can_task", 6 * 1024, NULL, 9, &can_TaskHandle);
+  xTaskCreate(can_task, "can_task", 6 * 1024, NULL, 15, &can_TaskHandle);
 }

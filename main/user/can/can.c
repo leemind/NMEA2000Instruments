@@ -760,11 +760,10 @@ void can_task(void *arg) {
   // Create a new TWAI controller driver instance
   ESP_ERROR_CHECK(twai_new_node_onchip(&node_config, &node_hdl));
 
-  // Configure "Accept All" filters for both Standard and Extended frames
+  // Configure "Accept All" filter for Extended frames (NMEA2000 standard).
+  // Note: ESP32-S3 supports only 1 mask filter per node in this driver.
   twai_mask_filter_config_t accept_all_ext = {.id = 0, .mask = 0, .is_ext = 1};
-  twai_mask_filter_config_t accept_all_std = {.id = 0, .mask = 0, .is_ext = 0};
   ESP_ERROR_CHECK(twai_node_config_mask_filter(node_hdl, 0, &accept_all_ext));
-  ESP_ERROR_CHECK(twai_node_config_mask_filter(node_hdl, 1, &accept_all_std));
 
   ESP_ERROR_CHECK(
       twai_node_register_event_callbacks(node_hdl, &user_cbs, NULL));
