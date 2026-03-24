@@ -1,8 +1,42 @@
 dependencies:
+  espressif/cjson:
+    component_hash: 002c6d1872ee4c97d333938ebe107a29841cc847f9de89e676714bd2844057ea
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.7.19~1
+  espressif/esp_lcd_touch:
+    component_hash: 3f85a7d95af876f1a6ecca8eb90a81614890d0f03a038390804e5a77e2caf862
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4.2'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.2.1
+  espressif/esp_lcd_touch_gt911:
+    component_hash: be02e243d18b9a661bc13b0d22c0a5cfa3f708cf04d6eb059772276c8c8a4d76
+    dependencies:
+    - name: espressif/esp_lcd_touch
+      registry_url: https://components.espressif.com
+      require: public
+      version: ^1.2.0
+    - name: idf
+      require: private
+      version: '>=4.4.2'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.2.0~1
   idf:
     source:
       type: idf
-    version: 5.5.3
+    version: 6.0.0
   joltwallet/littlefs:
     component_hash: dcea25bcef2de023f089f5f01e8d8c46ad1b8ffef75861ad5ffb4098555839df
     dependencies:
@@ -16,13 +50,15 @@ dependencies:
   lvgl/lvgl:
     dependencies: []
     source:
-      path: /Users/david/Development_Local/ESP-IDF/NMEA2000Instruments/components/lvgl_port/lvgl__lvgl
+      path: components/lvgl_port/lvgl__lvgl
       type: local
     version: 8.4.0
 direct_dependencies:
+- espressif/cjson
+- espressif/esp_lcd_touch_gt911
 - idf
 - joltwallet/littlefs
 - lvgl/lvgl
-manifest_hash: aea011ebcc92c24032e4daab5b53cf70f6f5c24edae96bec7befdd874484c001
+manifest_hash: eb58ccc3cb225e11e09c584c855bf0ad29651fb638aecc2ee6487c071ad86471
 target: esp32s3
-version: 2.0.0
+version: 3.0.0

@@ -1,7 +1,12 @@
 #ifndef _CAN_
 #define _CAN_
 
-#include "twai.h"  // Include the TWAI (CAN) driver for communication with the CAN bus
+#include "esp_twai_onchip.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#define TX_GPIO_NUM GPIO_NUM_20 // Transmit GPIO number for CAN
+#define RX_GPIO_NUM GPIO_NUM_19 // Receive GPIO number for CAN
 
 // Define the maximum number of hexadecimal bytes that can be processed
 #define MAX_HEX_DATA 32  // Maximum number of hexadecimal bytes
