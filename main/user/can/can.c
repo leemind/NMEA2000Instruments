@@ -726,7 +726,10 @@ void can_task(void *arg) {
   twai_onchip_node_config_t node_config = {
       .io_cfg.tx = TX_GPIO_NUM,     // TWAI TX GPIO pin
       .io_cfg.rx = RX_GPIO_NUM,     // TWAI RX GPIO pin
+      .io_cfg.quanta_clk_out = -1,  // Not used
+      .io_cfg.bus_off_indicator = -1, // Not used
       .bit_timing.bitrate = 250000, // 250 kbps bitrate
+      .fail_retry_cnt = -1,         // Retry forever
       .tx_queue_depth = 5,          // Transmit queue depth set to 5
   };
   // Create a new TWAI controller driver instance
