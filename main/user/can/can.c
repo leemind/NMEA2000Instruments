@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/idf_additions.h"
 #include "freertos/queue.h"
 
 #include "can.h"          // Include the CAN driver for communication
@@ -654,6 +655,24 @@ void can_update_textarea_cb(lv_timer_t *timer) {
   // the new CAN data
 }
 
+static bool twai_error_cb(twai_node_handle_t handle,
+                          const twai_error_event_data_t *edata,
+                          void *user_ctx) {
+  ESP_LOGW(TAG, "CAN Error: arb_lost=%d, bit=%d, form=%d, stuff=%d, ack=%d",
+           (int)edata->err_flags.arb_lost, (int)edata->err_flags.bit_err,
+           (int)edata->err_flags.form_err, (int)edata->err_flags.stuff_err,
+           (int)edata->err_flags.ack_err);
+  return false;
+}
+
+static bool twai_state_cb(twai_node_handle_t handle,
+                          const twai_state_change_event_data_t *edata,
+                          void *user_ctx) {
+  const char *st[] = {"Active", "Warning", "Passive", "Bus-Off"};
+  ESP_LOGI(TAG, "CAN State: %s -> %s", st[edata->old_sta], st[edata->new_sta]);
+  return false;
+}
+
 static bool twai_rx_cb(twai_node_handle_t handle,
                        const twai_rx_done_event_data_t *edata, void *user_ctx) {
   uint8_t recv_buff[8];
@@ -664,8 +683,10 @@ static bool twai_rx_cb(twai_node_handle_t handle,
 
   bool need_yield = false;
 
-  // Loop until we've read all available frames in the ISR
-  while (twai_node_receive_from_isr(handle, &rx_frame) == ESP_OK) {
+  // In the new esp_driver_twai v6.0+, the driver's ISR already loops to drain
+  // the hardware FIFO and calls this callback for each message.
+  // We only need to parse the current message once.
+  if (twai_node_receive_from_isr(handle, &rx_frame) == ESP_OK) {
     // Populate our custom message struct
     can_msg_t msg;
     msg.identifier = rx_frame.header.id;
@@ -708,7 +729,8 @@ void can_task(void *arg) {
   }
 
   // Create the FreeRTOS Queue for CAN messages before we enable TWAI
-  can_rx_queue = xQueueCreate(20, sizeof(can_msg_t));
+  // Increased size to 50 to better handle bursts of NMEA2000 messages.
+  can_rx_queue = xQueueCreate(50, sizeof(can_msg_t));
   if (can_rx_queue == NULL) {
     ESP_LOGE(TAG, "Failed to create CAN RX Queue!");
   }
@@ -720,6 +742,8 @@ void can_task(void *arg) {
 
   twai_event_callbacks_t user_cbs = {
       .on_rx_done = twai_rx_cb,
+      .on_error = twai_error_cb,
+      .on_state_change = twai_state_cb,
   };
 
   twai_node_handle_t node_hdl = NULL;
@@ -729,11 +753,19 @@ void can_task(void *arg) {
       .io_cfg.quanta_clk_out = -1,  // Not used
       .io_cfg.bus_off_indicator = -1, // Not used
       .bit_timing.bitrate = 250000, // 250 kbps bitrate
+      .bit_timing.sp_permill = 750,
       .fail_retry_cnt = -1,         // Retry forever
       .tx_queue_depth = 5,          // Transmit queue depth set to 5
   };
   // Create a new TWAI controller driver instance
   ESP_ERROR_CHECK(twai_new_node_onchip(&node_config, &node_hdl));
+
+  // Configure "Accept All" filters for both Standard and Extended frames
+  twai_mask_filter_config_t accept_all_ext = {.id = 0, .mask = 0, .is_ext = 1};
+  twai_mask_filter_config_t accept_all_std = {.id = 0, .mask = 0, .is_ext = 0};
+  ESP_ERROR_CHECK(twai_node_config_mask_filter(node_hdl, 0, &accept_all_ext));
+  ESP_ERROR_CHECK(twai_node_config_mask_filter(node_hdl, 1, &accept_all_std));
+
   ESP_ERROR_CHECK(
       twai_node_register_event_callbacks(node_hdl, &user_cbs, NULL));
   // Start the TWAI controller
@@ -741,8 +773,21 @@ void can_task(void *arg) {
 
   can_msg_t message;     // Variable to store received CAN message
   char message_str[256]; // Buffer to store formatted message string
+  uint32_t last_status_log_ms = 0;
 
   while (1) {
+    uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    if (now_ms - last_status_log_ms > 5000) {
+      twai_node_status_t status;
+      twai_node_record_t record;
+      if (twai_node_get_info(node_hdl, &status, &record) == ESP_OK) {
+        ESP_LOGI(TAG, "Status: State=%d, TX_Err=%d, RX_Err=%d, Bus_Err=%lu",
+                 (int)status.state, (int)status.tx_error_count,
+                 (int)status.rx_error_count, (unsigned long)record.bus_err_num);
+      }
+      last_status_log_ms = now_ms;
+    }
+
     // Wait for a message to arrive in the queue (block up to 100ms)
     if (xQueueReceive(can_rx_queue, &message, pdMS_TO_TICKS(100)) == pdTRUE) {
 
@@ -772,10 +817,11 @@ void can_task(void *arg) {
                (unsigned long)message.identifier, message.data_length);
       strncat(can_data, message_str, sizeof(can_data) - strlen(can_data) - 1);
 
-      // Create a timer to update the textarea every 100ms
-      lv_timer_t *t = lv_timer_create(can_update_textarea_cb, 100, NULL);
-      lv_timer_set_repeat_count(t, 1); // Execute once
+      // Appendix: Avoid creating lv_timers in a loop here as it leaks memory
+      // and causes resource exhaustion. If UI updates are needed, trigger
+      // them via a signal or a single persistent timer.
     }
+    vTaskDelay(5 / portTICK_PERIOD_MS);
   }
 }
 
