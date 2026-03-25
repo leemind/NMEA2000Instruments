@@ -290,7 +290,9 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
 
   case 127250: {
     /* Vessel Heading */
-    double heading_rad = get_pgn_field_value(pgn_def, data, data_len, "heading");
+    double heading_rad = get_pgn_field_value(pgn_def, data, data_len, "headingSensorReading");
+    double deviation_rad = get_pgn_field_value(pgn_def, data, data_len, "deviation");
+    double variation_rad = get_pgn_field_value(pgn_def, data, data_len, "variation");
     if (isnan(heading_rad))
       break;
 
