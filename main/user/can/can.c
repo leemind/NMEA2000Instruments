@@ -24,6 +24,7 @@
 #include "ui.h"
 #include "settings.h"        // settings_get_depth_unit() etc.
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
 
 TaskHandle_t can_TaskHandle;
 
@@ -203,6 +204,66 @@ static void img_angle_anim_cb(void *obj, int32_t angle) {
 }
 
 /**
+ * @brief Decode and extract a value from raw CAN data based on field definition
+ *
+ * Handles bit extraction with proper byte ordering
+ */
+static double decode_field_value(const uint8_t *data, int data_len,
+                                 cJSON *field) {
+  cJSON *bit_length = cJSON_GetObjectItem(field, "BitLength");
+  cJSON *bit_offset = cJSON_GetObjectItem(field, "BitOffset");
+  cJSON *resolution = cJSON_GetObjectItem(field, "Resolution");
+
+  if (!bit_length || !bit_offset)
+    return 0.0;
+
+  int bits = bit_length->valueint;
+  int offset = bit_offset->valueint;
+  int byte_pos = offset / 8;
+  int bit_pos = offset % 8;
+
+  // Extract raw value from bytes
+  uint64_t raw_value = 0;
+
+  for (int i = 0; i < bits && byte_pos < data_len; i++) {
+    uint8_t byte = data[byte_pos];
+    uint8_t bit = (byte >> bit_pos) & 0x01;
+    raw_value |= ((uint64_t)bit << i);
+
+    bit_pos++;
+    if (bit_pos >= 8) {
+      bit_pos = 0;
+      byte_pos++;
+    }
+  }
+
+  // Apply resolution
+  double value = (double)raw_value;
+  if (resolution) {
+    value *= resolution->valuedouble;
+  }
+
+  return value;
+}
+
+/**
+ * @brief Helper to get a decoded field value by its JSON ID.
+ * Returns NAN if field not found.
+ */
+static double get_pgn_field_value(cJSON *pgn_def, const uint8_t *data,
+                                  int data_len, const char *field_id) {
+  cJSON *fields = cJSON_GetObjectItem(pgn_def, "Fields");
+  cJSON *field = NULL;
+  cJSON_ArrayForEach(field, fields) {
+    cJSON *id = cJSON_GetObjectItem(field, "Id");
+    if (id && id->valuestring && strcmp(id->valuestring, field_id) == 0) {
+      return decode_field_value(data, data_len, field);
+    }
+  }
+  return NAN;
+}
+
+/**
  * @brief Dispatch a decoded PGN to the appropriate fixed UI element.
  *
  * This function handles the special-case PGNs whose destination UI element
@@ -212,31 +273,28 @@ static void img_angle_anim_cb(void *obj, int32_t angle) {
  * All LVGL writes are wrapped in lvgl_port_lock() because this runs in the
  * CAN task, not in the LVGL task.
  *
- * @param pgn      18-bit NMEA2000 PGN
+ * @param pgn_def  PGN definition from JSON database
  * @param data     Raw CAN data payload bytes
  * @param data_len Number of payload bytes
  */
-static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len) {
+static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) {
+  if (!pgn_def)
+    return;
+
+  cJSON *pgn_item = cJSON_GetObjectItem(pgn_def, "PGN");
+  if (!pgn_item)
+    return;
+  uint32_t pgn = pgn_item->valueint;
+
   switch (pgn) {
 
   case 127250: {
-    /* Vessel Heading
-     * Byte 0     : SID (sequence ID)
-     * Bytes 1-2  : Heading, uint16 LE, resolution = 0.0001 rad/LSB
-     * Bytes 3-4  : Deviation  (ignored here)
-     * Bytes 5-6  : Variation  (ignored here)
-     * Byte  7    : Reference  (ignored here)
-     */
-    if (data_len < 3)
+    /* Vessel Heading */
+    double heading_rad = get_pgn_field_value(pgn_def, data, data_len, "heading");
+    if (isnan(heading_rad))
       break;
 
-    uint16_t raw = (uint16_t)data[1] | ((uint16_t)data[2] << 8);
-
-    /* 0xFFFF is the NMEA2000 "not available" sentinel */
-    if (raw == 0xFFFFU)
-      break;
-
-    float heading_deg = (float)raw * 0.0001f * (180.0f / (float)M_PI);
+    float heading_deg = (float)heading_rad * (180.0f / (float)M_PI);
 
     /* Clamp to 0-360 */
     while (heading_deg >= 360.0f)
@@ -295,29 +353,17 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len) {
   }
 
   case 130306: {
-    /* Wind Data
-     * Byte 0     : SID
-     * Bytes 1-2  : Wind Speed, uint16 LE, resolution = 0.01 m/s/LSB
-     * Bytes 3-4  : Wind Direction, uint16 LE, resolution = 0.0001 rad/LSB
-     * Byte  5    : Wind Reference (bits 0-2); ignored here
-     */
-    if (data_len < 5)
+    /* Wind Data */
+    double speed_ms = get_pgn_field_value(pgn_def, data, data_len, "windSpeed");
+    double angle_rad = get_pgn_field_value(pgn_def, data, data_len, "windDirection");
+
+    if (isnan(speed_ms) || isnan(angle_rad))
       break;
 
     app_settings_t settings = settings_get();
 
-    uint16_t spd_raw = (uint16_t)data[1] | ((uint16_t)data[2] << 8);
-    uint16_t dir_raw = (uint16_t)data[3] | ((uint16_t)data[4] << 8);
-
-    /* 0xFFFF = "not available" sentinel for both fields */
-    if (spd_raw == 0xFFFFU || dir_raw == 0xFFFFU)
-      break;
-
-    /* Speed: 0.01 m/s per LSB → knots (1 m/s = 1.94384 kts) */
-    float speed_ms = (float)spd_raw * 0.01f;
-
-    /* Angle: 0.0001 rad per LSB → degrees */
-    float angle_deg = (float)dir_raw * 0.0001f * (180.0f / (float)M_PI);
+    /* Angle: rad → degrees */
+    float angle_deg = (float)angle_rad * (180.0f / (float)M_PI);
     while (angle_deg >= 360.0f)
       angle_deg -= 360.0f;
 
@@ -392,21 +438,14 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len) {
   }
 
   case 129026: {
-    /* COG & SOG, Rapid Update
-     * Byte 0     : SID
-     * Bytes 1    : COG Reference (2 bits) + Reserved (6 bits)
-     * Bytes 2-3  : COG, uint16 LE, 0.0001 rad/LSB
-     * Bytes 4-5  : SOG, uint16 LE, 0.01 m/s/LSB
-     */
-    if (data_len < 6)
+    /* COG & SOG, Rapid Update */
+    double cog_rad = get_pgn_field_value(pgn_def, data, data_len, "cog");
+    double sog_ms = get_pgn_field_value(pgn_def, data, data_len, "sog");
+
+    if (isnan(sog_ms))
       break;
 
-    uint16_t cog_raw = (uint16_t)data[2] | ((uint16_t)data[3] << 8);
-    uint16_t sog_raw = (uint16_t)data[4] | ((uint16_t)data[5] << 8);
-    if (sog_raw == 0xFFFFU)
-      break;
-
-    g_sog_kts = (float)sog_raw * 0.01f * 1.94384f;
+    g_sog_kts = (float)sog_ms * 1.94384f;
     g_sog_valid = true;
 
     /* SOG string */
@@ -415,8 +454,8 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len) {
 
     /* COG string (degrees, 0-360) */
     char cog_buf[8];
-    if (cog_raw != 0xFFFFU) {
-      float cog_deg = (float)cog_raw * 0.0001f * (180.0f / (float)M_PI);
+    if (!isnan(cog_rad)) {
+      float cog_deg = (float)cog_rad * (180.0f / (float)M_PI);
       while (cog_deg >= 360.0f)
         cog_deg -= 360.0f;
       snprintf(cog_buf, sizeof(cog_buf), "%03.0f", cog_deg);
@@ -448,33 +487,18 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len) {
   }
 
   case 128267: {
-    /* Water Depth
-     * Byte 0     : SID
-     * Bytes 1-4  : Depth (transducer), uint32 LE, 0.01 m/LSB
-     * Bytes 5-6  : Offset, int16 LE, 0.001 m/LSB (+ve = below transducer)
-     *
-     * True depth  =  transducer depth + offset
-     * Display in metres, 1 decimal place.
-     */
-    if (data_len < 7)
+    /* Water Depth */
+    double depth_m = get_pgn_field_value(pgn_def, data, data_len, "waterDepth");
+    double offset_m = get_pgn_field_value(pgn_def, data, data_len, "offset");
+
+    if (isnan(depth_m))
       break;
-
-    uint32_t dep_raw = (uint32_t)data[1] | ((uint32_t)data[2] << 8) |
-                       ((uint32_t)data[3] << 16) | ((uint32_t)data[4] << 24);
-
-    if (dep_raw == 0xFFFFFFFFU)
-      break;
-
-    int16_t off_raw = (int16_t)((uint16_t)data[5] | ((uint16_t)data[6] << 8));
 
     app_settings_t settings = settings_get();
 
-    float total_depth_raw =
-        (float)dep_raw +
-        (settings.use_transducer_offset ? (float)off_raw * 10 : 0.0f);
+    float total_depth_m = (float)depth_m + (settings.use_transducer_offset && !isnan(offset_m) ? (float)offset_m : 0.0f);
 
-    float depth_user =
-        (float)total_depth_raw * depth_convert[settings.depth_unit];
+    float depth_user = (float)total_depth_m * depth_convert[settings.depth_unit];
 
     char dep_buf[8];
     snprintf(dep_buf, sizeof(dep_buf), "%.1f", depth_user);
@@ -524,54 +548,7 @@ static void handle_pgn_fixed(uint32_t pgn, const uint8_t *data, int data_len) {
   }
 }
 
-/**
- * @brief Decode and extract a value from raw CAN data based on field definition
- *
- * Handles bit extraction with proper byte ordering
- */
-static double decode_field_value(const uint8_t *data, int data_len,
-                                 cJSON *field) {
-  cJSON *bit_length = cJSON_GetObjectItem(field, "BitLength");
-  cJSON *bit_offset = cJSON_GetObjectItem(field, "BitOffset");
-  cJSON *resolution = cJSON_GetObjectItem(field, "Resolution");
-  /* Note: "Signed" field available in PGN DB but sign-extension not yet
-   * implemented */
 
-  if (!bit_length || !bit_offset)
-    return 0.0;
-
-  int bits = bit_length->valueint;
-  int offset = bit_offset->valueint;
-  int byte_pos = offset / 8;
-  int bit_pos = offset % 8;
-
-  // Extract raw value from bytes
-  uint64_t raw_value = 0;
-
-  for (int i = 0; i < bits && byte_pos < data_len; i++) {
-    uint8_t byte = data[byte_pos];
-    uint8_t bit = (byte >> bit_pos) & 0x01;
-    raw_value |= ((uint64_t)bit << i);
-
-    bit_pos++;
-    if (bit_pos >= 8) {
-      bit_pos = 0;
-      byte_pos++;
-    }
-  }
-
-  // Apply resolution
-  double value = (double)raw_value;
-  if (resolution) {
-    value *= resolution->valuedouble;
-  }
-
-  return value;
-}
-
-/**
- * @brief Print decoded PGN message to terminal
- */
 static void print_pgn_message(uint32_t can_id, const uint8_t *data,
                               int data_len) {
   int64_t start_time = esp_timer_get_time();
@@ -634,10 +611,9 @@ static void print_pgn_message(uint32_t can_id, const uint8_t *data,
   strncat(log_buf, "\n", sizeof(log_buf) - strlen(log_buf) - 1);
 
   ESP_LOGI(TAG, "\n%s", log_buf);
-  can_debug_ui_add_log(log_buf);
 
   /* Dispatch to the fixed UI element handler */
-  handle_pgn_fixed(pgn, data, data_len);
+  handle_pgn_fixed(pgn_def, data, data_len);
 }
 
 void can_update_textarea_cb(lv_timer_t *timer) {
@@ -710,6 +686,9 @@ static bool twai_rx_cb(twai_node_handle_t handle,
  * @param arg Task argument, not used in this function.
  */
 void can_task(void *arg) {
+  // Register this task to be monitored by the Task Watchdog (TWDT)
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_task_wdt_add(NULL));
+
   // Load PGN database on startup
   const char *db_path = "/littlefs/PGNS/NMEA_database_1_300.json";
   pgn_database = pgn_json_load(db_path);
@@ -747,7 +726,7 @@ void can_task(void *arg) {
       .io_cfg.quanta_clk_out = -1,  // Not used
       .io_cfg.bus_off_indicator = -1, // Not used
       .bit_timing.bitrate = 250000, // 250 kbps bitrate
-      .bit_timing.sp_permill = 750,
+      .bit_timing.sp_permill = 800, // Increased to 80% for NMEA2000 robustness
       .fail_retry_cnt = -1,         // Retry forever
       .tx_queue_depth = 5,          // Transmit queue depth set to 5
   };
@@ -759,10 +738,14 @@ void can_task(void *arg) {
   twai_mask_filter_config_t accept_all_ext = {.id = 0, .mask = 0, .is_ext = 1};
   ESP_ERROR_CHECK(twai_node_config_mask_filter(node_hdl, 0, &accept_all_ext));
 
-  ESP_ERROR_CHECK(
-      twai_node_register_event_callbacks(node_hdl, &user_cbs, NULL));
-  // Start the TWAI controller
-  ESP_ERROR_CHECK(twai_node_enable(node_hdl));
+   ESP_ERROR_CHECK(
+       twai_node_register_event_callbacks(node_hdl, &user_cbs, NULL));
+  
+   // Explicitly select CAN communication interface (0 for USB, 1 for CAN)
+   IO_EXTENSION_Output(IO_EXTENSION_IO_5, 1);
+  
+   // Start the TWAI controller
+   ESP_ERROR_CHECK(twai_node_enable(node_hdl));
 
   can_msg_t message;     // Variable to store received CAN message
   char message_str[256]; // Buffer to store formatted message string
@@ -774,9 +757,18 @@ void can_task(void *arg) {
       twai_node_status_t status;
       twai_node_record_t record;
       if (twai_node_get_info(node_hdl, &status, &record) == ESP_OK) {
-        ESP_LOGI(TAG, "Status: State=%d, TX_Err=%d, RX_Err=%d, Bus_Err=%lu",
-                 (int)status.state, (int)status.tx_error_count,
-                 (int)status.rx_error_count, (unsigned long)record.bus_err_num);
+        uint8_t io_in = IO_EXTENSION_Input(IO_EXTENSION_IO_5); // Read current state
+        IO_EXTENSION_ScanBus(); // Scan bus every 5s to find disappearing devices
+
+        ESP_LOGI(TAG, "Status: St=%d | CAN_SEL=%d | TX_Err=%d RX_Err=%d Bus_Err=%lu",
+                 (int)status.state, (int)io_in, 
+                 (int)status.tx_error_count, (int)status.rx_error_count,
+                 (unsigned long)record.bus_err_num);
+        
+        if (!io_in) {
+            ESP_LOGW(TAG, "CAN Selection Lost! Re-asserting...");
+            IO_EXTENSION_Output(IO_EXTENSION_IO_5, 1);
+        }
       }
       last_status_log_ms = now_ms;
     }
@@ -796,13 +788,13 @@ void can_task(void *arg) {
          snprintf(message_str, sizeof(message_str), "ID: 0x%03lX | Len: %d\n",
                   (unsigned long)message.identifier, message.data_length);
          ESP_LOGI(TAG, "%s", message_str);
-         can_debug_ui_add_log(message_str);
       }
 
       // Appendix: Avoid creating lv_timers in a loop here as it leaks memory
       // and causes resource exhaustion. If UI updates are needed, trigger
       // them via a signal or a single persistent timer.
     }
+    esp_task_wdt_reset();
     vTaskDelay(5 / portTICK_PERIOD_MS);
   }
 }
