@@ -439,8 +439,8 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
 
   case 129026: {
     /* COG & SOG, Rapid Update */
-    double cog_rad = get_pgn_field_value(pgn_def, data, data_len, "cog");
-    double sog_ms = get_pgn_field_value(pgn_def, data, data_len, "sog");
+    double cog_rad = get_pgn_field_value(pgn_def, data, data_len, "courseOverGround");
+    double sog_ms = get_pgn_field_value(pgn_def, data, data_len, "speedOverGround");
 
     if (isnan(sog_ms))
       break;
@@ -488,7 +488,7 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
 
   case 128267: {
     /* Water Depth */
-    double depth_m = get_pgn_field_value(pgn_def, data, data_len, "waterDepth");
+    double depth_m = get_pgn_field_value(pgn_def, data, data_len, "waterDepthTransducer");
     double offset_m = get_pgn_field_value(pgn_def, data, data_len, "offset");
 
     if (isnan(depth_m))
