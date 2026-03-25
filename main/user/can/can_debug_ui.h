@@ -26,6 +26,12 @@ void can_debug_ui_update_msg(uint32_t can_id, const uint8_t *data, uint8_t len);
  */
 void can_debug_ui_update_status(uint32_t alerts);
 
+/**
+ * @brief Add a comprehensive log message to the UI
+ * @param text The log text to append
+ */
+void can_debug_ui_add_log(const char *text);
+
 #ifdef __cplusplus
 }
 #endif

@@ -24,7 +24,7 @@ static app_settings_t s_settings = {
 
 const double wind_convert[4]     = {1.94384, 2.23694, 1.0, 3.6};
 const char   wind_unit_str[4][4] = {"kts", "mph", "m/s", "kph"};
-const double depth_convert[2]    = {1.0, 3.28084};
+const double depth_convert[2]    = {0.01, 0.0328084};
 const char   depth_unit_str[2][4] = {"m", "ft"};
 
 /* -----------------------------------------------------------------------

@@ -36,7 +36,6 @@ typedef struct {
 // Define a global queue handle
 static QueueHandle_t can_rx_queue = NULL;
 
-static char can_data[2 * 1024] = {0}; // Buffer for receiving data
 static cJSON *pgn_database = NULL;    // Global PGN database
 static const char *TAG = "CAN_DECODER";
 
@@ -578,43 +577,37 @@ static void print_pgn_message(uint32_t can_id, const uint8_t *data,
   uint8_t priority = extract_priority_from_can_id(can_id);
   uint8_t source = extract_source_from_can_id(can_id);
 
+  char log_buf[1024] = {0};
+  char line[256];
+
   // Look up PGN definition
   cJSON *pgn_def = pgn_get_definition(pgn_database, pgn);
 
   if (!pgn_def) {
-    // PGN not found, print raw data
-    ESP_LOGI(TAG, "=== UNKNOWN PGN ===");
-    ESP_LOGI(TAG, "PGN: %d (0x%X) | Priority: %d | Source: %d", pgn, pgn,
-             priority, source);
-    ESP_LOGI(TAG, "Data (%d bytes):", data_len);
-
-    char hex_str[256] = {0};
+    snprintf(log_buf, sizeof(log_buf), "--- UNKNOWN PGN ---\nPGN: %d (0x%X) | Pri: %d | Src: %d\nData: ",
+             (int)pgn, (unsigned int)pgn, priority, source);
     for (int i = 0; i < data_len; i++) {
-      snprintf(hex_str + strlen(hex_str), sizeof(hex_str) - strlen(hex_str),
-               "%02X ", data[i]);
+        snprintf(line, sizeof(line), "%02X ", data[i]);
+        strncat(log_buf, line, sizeof(log_buf) - strlen(log_buf) - 1);
     }
-    ESP_LOGI(TAG, "%s", hex_str);
+    strncat(log_buf, "\n\n", sizeof(log_buf) - strlen(log_buf) - 1);
+    ESP_LOGI(TAG, "%s", log_buf);
+    can_debug_ui_add_log(log_buf);
     return;
   }
 
-  // Print header
   cJSON *pgn_id = cJSON_GetObjectItem(pgn_def, "Id");
   cJSON *description = cJSON_GetObjectItem(pgn_def, "Description");
 
-  ESP_LOGI(TAG, "=== PGN MESSAGE ===");
-  ESP_LOGI(TAG, "PGN: %d | Name: %s", pgn,
-           pgn_id && pgn_id->valuestring ? pgn_id->valuestring : "unknown");
-  ESP_LOGI(TAG, "Description: %s",
-           description && description->valuestring ? description->valuestring
-                                                   : "N/A");
-  ESP_LOGI(TAG, "Priority: %d | Source: %d | Length: %d bytes", priority,
-           source, data_len);
+  snprintf(log_buf, sizeof(log_buf), "PGN: %d | %s\n%s\nPri:%d | Src:%d | Len:%d\n",
+           (int)pgn, pgn_id && pgn_id->valuestring ? pgn_id->valuestring : "unknown",
+           description && description->valuestring ? description->valuestring : "",
+           priority, source, data_len);
 
   // Decode and print fields
   cJSON *fields = cJSON_GetObjectItem(pgn_def, "Fields");
   if (fields && fields->child) {
-    ESP_LOGI(TAG, "Fields:");
-
+    strncat(log_buf, "Fields:\n", sizeof(log_buf) - strlen(log_buf) - 1);
     cJSON *field = NULL;
     cJSON_ArrayForEach(field, fields) {
       cJSON *field_id = cJSON_GetObjectItem(field, "Id");
@@ -622,25 +615,20 @@ static void print_pgn_message(uint32_t can_id, const uint8_t *data,
       cJSON *field_type = cJSON_GetObjectItem(field, "FieldType");
       cJSON *unit = cJSON_GetObjectItem(field, "Unit");
 
-      if (!field_id)
-        continue;
-
-      // Skip reserved fields
-      if (field_type && field_type->valuestring &&
-          strcmp(field_type->valuestring, "RESERVED") == 0) {
-        continue;
-      }
+      if (!field_id) continue;
+      if (field_type && field_type->valuestring && strcmp(field_type->valuestring, "RESERVED") == 0) continue;
 
       double value = decode_field_value(data, data_len, field);
-
-      ESP_LOGI(TAG, "  %s (%s): %.4f%s",
-               field_name && field_name->valuestring ? field_name->valuestring
-                                                     : field_id->valuestring,
-               field_id->valuestring, value,
-               unit && unit->valuestring ? unit->valuestring : "");
+      snprintf(line, sizeof(line), "  %s: %.2f %s\n",
+               field_name && field_name->valuestring ? field_name->valuestring : field_id->valuestring,
+               value, unit && unit->valuestring ? unit->valuestring : "");
+      strncat(log_buf, line, sizeof(log_buf) - strlen(log_buf) - 1);
     }
   }
-  ESP_LOGI(TAG, ""); // Blank line for clarity
+  strncat(log_buf, "\n", sizeof(log_buf) - strlen(log_buf) - 1);
+
+  ESP_LOGI(TAG, "\n%s", log_buf);
+  can_debug_ui_add_log(log_buf);
 
   /* Dispatch to the fixed UI element handler */
   handle_pgn_fixed(pgn, data, data_len);
@@ -793,28 +781,17 @@ void can_task(void *arg) {
       can_debug_ui_update_msg(message.identifier, message.data,
                               message.data_length);
 
-      // Decode and print the PGN message to terminal
+      // Decoder output handles both logging and UI update
       if (pgn_database) {
         print_pgn_message(message.identifier, message.data,
                           message.data_length);
+      } else {
+         // Fallback for raw messages if DB is missing
+         snprintf(message_str, sizeof(message_str), "ID: 0x%03lX | Len: %d\n",
+                  (unsigned long)message.identifier, message.data_length);
+         ESP_LOGI(TAG, "%s", message_str);
+         can_debug_ui_add_log(message_str);
       }
-      // Fallback: print raw hex if database not loaded
-      snprintf(message_str, sizeof(message_str),
-               "ID: 0x%03lX | Length: %d | Data: ",
-               (unsigned long)message.identifier, message.data_length);
-
-      for (int i = 0; i < message.data_length; i++) {
-        snprintf(message_str + strlen(message_str),
-                 sizeof(message_str) - strlen(message_str), "%02X ",
-                 message.data[i]);
-      }
-
-      ESP_LOGI(TAG, "%s", message_str);
-
-      // Append the formatted message to the global CAN data buffer (for UI)
-      snprintf(message_str, sizeof(message_str), "ID: 0x%03lX | Len: %d\n",
-               (unsigned long)message.identifier, message.data_length);
-      strncat(can_data, message_str, sizeof(can_data) - strlen(can_data) - 1);
 
       // Appendix: Avoid creating lv_timers in a loop here as it leaks memory
       // and causes resource exhaustion. If UI updates are needed, trigger
