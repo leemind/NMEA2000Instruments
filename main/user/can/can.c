@@ -23,6 +23,7 @@
 #include "screens/ui_CANDebugScreen.h"
 #include "ui.h"
 #include "settings.h"        // settings_get_depth_unit() etc.
+#include "esp_timer.h"
 
 TaskHandle_t can_TaskHandle;
 
@@ -573,6 +574,7 @@ static double decode_field_value(const uint8_t *data, int data_len,
  */
 static void print_pgn_message(uint32_t can_id, const uint8_t *data,
                               int data_len) {
+  int64_t start_time = esp_timer_get_time();
   uint32_t pgn = extract_pgn_from_can_id(can_id);
   uint8_t priority = extract_priority_from_can_id(can_id);
   uint8_t source = extract_source_from_can_id(can_id);
@@ -625,6 +627,10 @@ static void print_pgn_message(uint32_t can_id, const uint8_t *data,
       strncat(log_buf, line, sizeof(log_buf) - strlen(log_buf) - 1);
     }
   }
+
+  int64_t end_time = esp_timer_get_time();
+  snprintf(line, sizeof(line), "Decode Time: %lld us\n", (end_time - start_time));
+  strncat(log_buf, line, sizeof(log_buf) - strlen(log_buf) - 1);
   strncat(log_buf, "\n", sizeof(log_buf) - strlen(log_buf) - 1);
 
   ESP_LOGI(TAG, "\n%s", log_buf);
