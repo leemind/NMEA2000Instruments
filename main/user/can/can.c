@@ -758,7 +758,7 @@ void can_task(void *arg) {
       twai_node_record_t record;
       if (twai_node_get_info(node_hdl, &status, &record) == ESP_OK) {
         uint8_t io_in = IO_EXTENSION_Input(IO_EXTENSION_IO_5); // Read current state
-        IO_EXTENSION_ScanBus(); // Scan bus every 5s to find disappearing devices
+        //IO_EXTENSION_ScanBus(); // Scan bus every 5s to find disappearing devices
 
         ESP_LOGI(TAG, "Status: St=%d | CAN_SEL=%d | TX_Err=%d RX_Err=%d Bus_Err=%lu",
                  (int)status.state, (int)io_in, 
@@ -767,6 +767,7 @@ void can_task(void *arg) {
         
         if (!io_in) {
             ESP_LOGW(TAG, "CAN Selection Lost! Re-asserting...");
+            IO_EXTENSION_Init();
             IO_EXTENSION_Output(IO_EXTENSION_IO_5, 1);
         }
       }
