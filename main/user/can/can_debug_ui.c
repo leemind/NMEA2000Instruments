@@ -39,10 +39,15 @@ void can_debug_ui_init(void) {
   lv_obj_set_style_bg_color(s_textarea, lv_color_hex(0x000000), 0);
   lv_obj_set_style_text_color(s_textarea, lv_color_hex(0x00FF00), 0); // Green text
   lv_obj_set_style_text_font(s_textarea, &lv_font_montserrat_12, 0);
-  lv_textarea_set_max_length(s_textarea, 10000); // Prevent memory explosion
+  lv_textarea_set_max_length(s_textarea, 3000); // Reduced to prevent layout lag
 }
 
 void can_debug_ui_add_log(const char *text) {
+  /* Disabled to prevent Task Watchdog Timeouts due to lv_textarea overhead.
+     Use serial terminal for comprehensive logs. */
+  return;
+
+#if 0
   if (!s_textarea)
     return;
 
@@ -52,6 +57,7 @@ void can_debug_ui_add_log(const char *text) {
     lv_obj_scroll_to_y(s_textarea, LV_COORD_MAX, LV_ANIM_OFF);
     lvgl_port_unlock();
   }
+#endif
 }
 
 void can_debug_ui_update_msg(uint32_t can_id, const uint8_t *data,
