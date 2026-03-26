@@ -12,6 +12,7 @@
 #define MAX_HEX_DATA 32  // Maximum number of hexadecimal bytes
 
 extern TaskHandle_t can_TaskHandle;  // Declare the task handle for the CAN task
+extern struct cJSON *pgn_database;   // Global PGN database
 
 /**
  * @brief Task for handling CAN communication.

@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
@@ -38,7 +42,7 @@ typedef struct {
 // Define a global queue handle
 static QueueHandle_t can_rx_queue = NULL;
 
-static cJSON *pgn_database = NULL;    // Global PGN database
+cJSON *pgn_database = NULL;    // Global PGN database
 static const char *TAG = "CAN_DECODER";
 
 /* Forward declaration — defined later in this file */
@@ -54,6 +58,30 @@ static float g_sog_kts = 0.0f; /* Speed Over Ground in knots         */
 static bool g_aws_valid = false;
 static bool g_awa_valid = false;
 static bool g_sog_valid = false;
+
+typedef struct {
+    lv_obj_t *value;
+    lv_obj_t *label;
+    lv_obj_t *unit;
+} databox_ui_t;
+
+static databox_ui_t g_databox_ui[10];
+static bool g_ui_initialized = false;
+
+static void init_databox_ui_pointers(void) {
+    if (g_ui_initialized) return;
+    g_databox_ui[0] = (databox_ui_t){uic_LHS1_DBValue, uic_LHS1_DBLabel, uic_LHS1_DBUnit};
+    g_databox_ui[1] = (databox_ui_t){uic_LHS2_DBValue, uic_LHS2_DBLabel, uic_LHS2_DBUnit};
+    g_databox_ui[2] = (databox_ui_t){uic_LHS3_DBValue, uic_LHS3_DBLabel, uic_LHS3_DBUnit};
+    g_databox_ui[3] = (databox_ui_t){uic_LHS4_DBValue, uic_LHS4_DBLabel, uic_LHS4_DBUnit};
+    g_databox_ui[4] = (databox_ui_t){uic_LHS5_DBValue, uic_LHS5_DBLabel, uic_LHS5_DBUnit};
+    g_databox_ui[5] = (databox_ui_t){uic_DBValue,      uic_RHS1_DBLabel, uic_RHS1_DBUnit};
+    g_databox_ui[6] = (databox_ui_t){uic_RHS2_DBValue, uic_RHS2_DBLabel, uic_RHS2_DBUnit};
+    g_databox_ui[7] = (databox_ui_t){uic_RHS3_DBValue, uic_RHS3_DBLabel, uic_RHS3_DBUnit};
+    g_databox_ui[8] = (databox_ui_t){uic_RHS4_DBValue, uic_RHS4_DBLabel, uic_RHS4_DBUnit};
+    g_databox_ui[9] = (databox_ui_t){uic_RHS5_DBValue, uic_RHS5_DBLabel, uic_RHS5_DBUnit};
+    g_ui_initialized = true;
+}
 
 /**
  * @brief Compute True Wind Speed/Angle from cached AWS, AWA and SOG,
@@ -91,30 +119,31 @@ static void compute_true_wind(void) {
   ESP_LOGD(TAG, "TWS=%.1f m/s  TWA=%.1f deg", tws, twa_deg);
 
   app_settings_t settings = settings_get();
-  /* --- LHS1: True Wind Speed --- */
-  char tws_buf[8];
-  snprintf(tws_buf, sizeof(tws_buf), "%.1f",
-           tws * wind_convert[settings.wind_unit]);
-  if (uic_LHS1_DBValue)
-    lv_label_set_text(uic_LHS1_DBValue, tws_buf);
-  if (uic_LHS1_DBLabel)
-    lv_label_set_text(uic_LHS1_DBLabel, "TWS");
-  if (uic_LHS1_DBUnit)
-    lv_label_set_text(uic_LHS1_DBUnit, wind_unit_str[settings.wind_unit]);
+  init_databox_ui_pointers();
 
-  /* --- LHS2: True Wind Angle (P/S notation) --- */
-  char twa_buf[10];
-  if (twa_deg < 180.0f) {
-    snprintf(twa_buf, sizeof(twa_buf), "P %03.0f", twa_deg);
-  } else {
-    snprintf(twa_buf, sizeof(twa_buf), "S %03.0f", 360.0f - twa_deg);
+  for (int i = 0; i < 10; i++) {
+    databox_config_t *cfg = &settings.databoxes[i];
+    if (cfg->pgn1 != 0xFFFFFFFF) continue;
+
+    if (strcmp(cfg->field1_id, "TWS") == 0) {
+      char tws_buf[8];
+      snprintf(tws_buf, sizeof(tws_buf), "%.1f", tws * wind_convert[settings.wind_unit]);
+      if (g_databox_ui[i].value) lv_label_set_text(g_databox_ui[i].value, tws_buf);
+      if (g_databox_ui[i].label) lv_label_set_text(g_databox_ui[i].label, cfg->label);
+      if (g_databox_ui[i].unit)  lv_label_set_text(g_databox_ui[i].unit,  wind_unit_str[settings.wind_unit]);
+    } 
+    else if (strcmp(cfg->field1_id, "TWA") == 0) {
+      char twa_buf[10];
+      if (twa_deg < 180.0f) {
+        snprintf(twa_buf, sizeof(twa_buf), "P %03.0f", twa_deg);
+      } else {
+        snprintf(twa_buf, sizeof(twa_buf), "S %03.0f", 360.0f - twa_deg);
+      }
+      if (g_databox_ui[i].value) lv_label_set_text(g_databox_ui[i].value, twa_buf);
+      if (g_databox_ui[i].label) lv_label_set_text(g_databox_ui[i].label, cfg->label);
+      if (g_databox_ui[i].unit)  lv_label_set_text(g_databox_ui[i].unit,  cfg->unit);
+    }
   }
-  if (uic_LHS2_DBValue)
-    lv_label_set_text(uic_LHS2_DBValue, twa_buf);
-  if (uic_LHS2_DBLabel)
-    lv_label_set_text(uic_LHS2_DBLabel, "TWA");
-  if (uic_LHS2_DBUnit)
-    lv_label_set_text(uic_LHS2_DBUnit, "deg");
 
   /* Rotate TruePointer — same formula and animation as ApparantPointer */
   if (ui_TruePointer) {
@@ -264,6 +293,109 @@ static double get_pgn_field_value(cJSON *pgn_def, const uint8_t *data,
 }
 
 /**
+ * @brief Handle computed values (TWS/TWA) if configured
+ */
+static void handle_computed_databoxes(void) {
+    compute_true_wind();
+}
+
+static double convert_unit(double value, const char *from, const char *to) {
+    if (!from || !to || !from[0] || !to[0] || strcmp(from, to) == 0) return value;
+    
+    /* Speed: m/s to ... */
+    if (strcmp(from, "m/s") == 0) {
+        if (strcmp(to, "knots") == 0) return value * 1.94384;
+        if (strcmp(to, "km/h") == 0) return value * 3.6;
+        if (strcmp(to, "mph") == 0) return value * 2.23694;
+    }
+    /* Distance: m to ... */
+    if (strcmp(from, "m") == 0) {
+        if (strcmp(to, "feet") == 0) return value * 3.28084;
+        if (strcmp(to, "fathoms") == 0) return value * 0.546807;
+        if (strcmp(to, "nm") == 0) return value / 1852.0;
+    }
+    /* Temp: K to ... */
+    if (strcmp(from, "K") == 0) {
+        if (strcmp(to, "C") == 0) return value - 273.15;
+        if (strcmp(to, "F") == 0) return (value - 273.15) * 1.8 + 32.0;
+    }
+    /* Pressure: Pa to ... */
+    if (strcmp(from, "Pa") == 0) {
+        if (strcmp(to, "bar") == 0) return value / 100000.0;
+        if (strcmp(to, "psi") == 0) return value * 0.000145038;
+        if (strcmp(to, "inHg") == 0) return value * 0.0002953;
+    }
+    /* Volume: L to ... */
+    if (strcmp(from, "L") == 0) {
+        if (strcmp(to, "gal (US)") == 0) return value * 0.264172;
+        if (strcmp(to, "gal (Imp)") == 0) return value * 0.219969;
+    }
+    /* Flow: L/h to ... */
+    if (strcmp(from, "L/h") == 0) {
+        if (strcmp(to, "gph (US)") == 0) return value * 0.264172;
+        if (strcmp(to, "gph (Imp)") == 0) return value * 0.219969;
+    }
+    /* Angle: rad to deg */
+    if (strcmp(from, "rad") == 0 && strcmp(to, "deg") == 0) {
+        return value * (180.0 / M_PI);
+    }
+    if (strcmp(from, "deg") == 0 && strcmp(to, "rad") == 0) {
+        return value * (M_PI / 180.0);
+    }
+
+    return value;
+}
+
+/**
+ * @brief Update dynamic databoxes based on incoming PGN
+ */
+static void handle_pgn_dynamic(cJSON *pgn_def, uint32_t pgn, const uint8_t *data, int data_len) {
+    app_settings_t settings = settings_get();
+    init_databox_ui_pointers();
+
+    for (int i = 0; i < 10; i++) {
+        databox_config_t *cfg = &settings.databoxes[i];
+        if (cfg->pgn1 == 0) continue;
+
+        double val = NAN;
+        bool update = false;
+
+        if (cfg->pgn1 == pgn) {
+            val = get_pgn_field_value(pgn_def, data, data_len, cfg->field1_id);
+            if (!isnan(val)) update = true;
+        }
+
+        /* Addition logic */
+        if (cfg->pgn2 != 0 && cfg->pgn2 == pgn) {
+            double val2 = get_pgn_field_value(pgn_def, data, data_len, cfg->field2_id);
+            if (!isnan(val2)) {
+                /* If we already have val1 from this same PGN, add them. 
+                   Otherwise we'd need a cache for cross-PGN addition.
+                   For now, same-PGN addition is supported. */
+                if (!isnan(val)) val += val2;
+                else val = val2; // Fallback if only f2 is in this PGN (unlikely for same PGN)
+                update = true;
+            }
+        }
+
+        if (update && !isnan(val)) {
+            /* Apply unit conversion */
+            val = convert_unit(val, cfg->unit, cfg->display_unit);
+
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%.1f", val); // Default 1 decimal place
+
+            if (lvgl_port_lock(100)) {
+                if (g_databox_ui[i].value) lv_label_set_text(g_databox_ui[i].value, buf);
+                if (g_databox_ui[i].label) lv_label_set_text(g_databox_ui[i].label, cfg->label);
+                if (g_databox_ui[i].unit)  lv_label_set_text(g_databox_ui[i].unit,  cfg->display_unit[0] ? cfg->display_unit : cfg->unit);
+                lvgl_port_unlock();
+            }
+        }
+    }
+}
+
+/**
  * @brief Dispatch a decoded PGN to the appropriate fixed UI element.
  *
  * This function handles the special-case PGNs whose destination UI element
@@ -285,6 +417,9 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
   if (!pgn_item)
     return;
   uint32_t pgn = pgn_item->valueint;
+
+  /* Handle dynamic databoxes first */
+  handle_pgn_dynamic(pgn_def, pgn, data, data_len);
 
   switch (pgn) {
 
@@ -467,21 +602,6 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
 
     /* Recompute true wind with updated SOG, and update RHS1/RHS2 databoxes */
     if (lvgl_port_lock(100)) {
-      /* RHS1 = SOG */
-      if (uic_DBValue)
-        lv_label_set_text(uic_DBValue, sog_buf);
-      if (uic_RHS1_DBLabel)
-        lv_label_set_text(uic_RHS1_DBLabel, "SOG");
-      if (uic_RHS1_DBUnit)
-        lv_label_set_text(uic_RHS1_DBUnit, "kts");
-      /* RHS2 = COG */
-      if (uic_RHS2_DBValue)
-        lv_label_set_text(uic_RHS2_DBValue, cog_buf);
-      if (uic_RHS2_DBLabel)
-        lv_label_set_text(uic_RHS2_DBLabel, "COG");
-      if (uic_RHS2_DBUnit)
-        lv_label_set_text(uic_RHS2_DBUnit, "deg");
-
       compute_true_wind();
       lvgl_port_unlock();
     }
@@ -506,13 +626,6 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
     snprintf(dep_buf, sizeof(dep_buf), "%.1f", depth_user);
 
     if (lvgl_port_lock(100)) {
-      if (uic_RHS3_DBValue)
-        lv_label_set_text(uic_RHS3_DBValue, dep_buf);
-      if (uic_RHS3_DBLabel)
-        lv_label_set_text(uic_RHS3_DBLabel, "DEPTH");
-      if (uic_RHS3_DBUnit)
-        lv_label_set_text(uic_RHS3_DBUnit, depth_unit_str[settings.depth_unit]);
-
       /* Auto-Depth Screen Populating */
       if (uic_DepthBig)
         lv_label_set_text(uic_DepthBig, dep_buf);

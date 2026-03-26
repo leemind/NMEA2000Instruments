@@ -35,11 +35,24 @@ extern const char   wind_unit_str[4][4];
  * -------------------------------------------------------------------- */
 
 typedef struct {
+    uint32_t pgn1;
+    char field1_id[32];
+    uint32_t pgn2;
+    char field2_id[32];
+    char label[16];
+    char unit[8];
+    char display_unit[8];
+} databox_config_t;
+
+typedef struct {
     uint8_t      brightness;   /* Screen backlight duty cycle, 0-100        */
     depth_unit_t depth_unit;   /* DEPTH_METRES or DEPTH_FEET                */
     wind_unit_t  wind_unit;    /* WIND_KNOTS / WIND_MPH / WIND_MS / WIND_KPH */
     uint8_t      autodepth_value; /* Auto depth value, 0-100                 */
     bool         use_transducer_offset;
+    char         wifi_ssid[32];
+    char         wifi_pass[64];
+    databox_config_t databoxes[10];
 } app_settings_t;
 
 /* -----------------------------------------------------------------------
@@ -89,6 +102,9 @@ void settings_set_wind_unit(wind_unit_t unit);
 void settings_set_autodepth_value(uint8_t value);
 
 void settings_set_use_transducer_offset(bool value);
+
+void settings_set_databox_config(int index, const databox_config_t *config);
+void settings_set_wifi_credentials(const char *ssid, const char *pass);
 
 #ifdef __cplusplus
 }

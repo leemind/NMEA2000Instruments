@@ -31,6 +31,7 @@
 #include "settings.h"     // Header for persistent settings (NVS)
 #include "gt911.h"  // Header for touch screen operations (GT911)
 #include "ui.h"           // Header for user interface initialization
+#include "wifi.h"         // WiFi driver
 
 #include "esp_log.h"
 #include "esp_err.h"
@@ -133,8 +134,9 @@ void app_main() {
   // This sets up the Micro SD card for data storage and retrieval.
   // sd_init();
 
-  // Start the WIFI task to handle Wi-Fi functionality
-  // This task manages Wi-Fi connections and hotspot creation.
-  // xTaskCreate(wifi_task, "wifi_task", 6 * 1024, NULL, 9, &wifi_TaskHandle);
+  // Start the WiFi system
+  wifi_init();
+
+  // Start the CAN task
   xTaskCreate(can_task, "can_task", 6 * 1024, NULL, 15, &can_TaskHandle);
 }

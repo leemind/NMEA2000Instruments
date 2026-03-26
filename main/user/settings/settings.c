@@ -12,6 +12,9 @@ static const char *KEY_DEPTH  = "depth_unit";
 static const char *KEY_WIND   = "wind_unit";
 static const char *KEY_AUTODEPTH = "autodepth_value";
 static const char *KEY_USE_TRANSDUCER_OFFSET = "use_transducer_offset";
+static const char *KEY_DATABOXES = "databoxes";
+static const char *KEY_WIFI_SSID = "wifi_ssid";
+static const char *KEY_WIFI_PASS = "wifi_pass";
 
 /* In-memory copy — written once on init, updated by every setter */
 static app_settings_t s_settings = {
@@ -19,7 +22,21 @@ static app_settings_t s_settings = {
     .depth_unit = SETTINGS_DEFAULT_DEPTH_UNIT,
     .wind_unit  = SETTINGS_DEFAULT_WIND_UNIT,
     .autodepth_value = SETTINGS_DEFAULT_AUTODEPTH_VALUE,
-    .use_transducer_offset = SETTINGS_DEFAULT_USE_TRANSDUCER_OFFSET
+    .use_transducer_offset = SETTINGS_DEFAULT_USE_TRANSDUCER_OFFSET,
+    .wifi_ssid = "",
+    .wifi_pass = "",
+    .databoxes = {
+        {0xFFFFFFFF, "TWS", 0, "", "TWS", "kts"},            /* LHS1 */
+        {0xFFFFFFFF, "TWA", 0, "", "TWA", "deg"},            /* LHS2 */
+        {0, "", 0, "", "-", ""},                               /* LHS3 */
+        {0, "", 0, "", "-", ""},                               /* LHS4 */
+        {0, "", 0, "", "-", ""},                               /* LHS5 */
+        {129026, "speedOverGround", 0, "", "SOG", "kts"},      /* RHS1 */
+        {129026, "courseOverGround", 0, "", "COG", "deg"},      /* RHS2 */
+        {128267, "waterDepthTransducer", 0, "", "DEPTH", "m"}, /* RHS3 */
+        {0, "", 0, "", "-", ""},                               /* RHS4 */
+        {0, "", 0, "", "-", ""},                               /* RHS5 */
+    }
 };
 
 const double wind_convert[4]     = {1.94384, 2.23694, 1.0, 3.6};
@@ -110,6 +127,29 @@ void settings_init(void)
         ESP_LOGW(TAG, "Error reading autodepth_value: %s", esp_err_to_name(err));
     }
 
+    /* databoxes */
+    size_t blob_len = sizeof(s_settings.databoxes);
+    err = nvs_get_blob(h, KEY_DATABOXES, s_settings.databoxes, &blob_len);
+    if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGW(TAG, "Error reading databoxes blob: %s", esp_err_to_name(err));
+    }
+
+    /* wifi_ssid */
+    size_t ssid_len = sizeof(s_settings.wifi_ssid);
+    nvs_get_str(h, KEY_WIFI_SSID, s_settings.wifi_ssid, &ssid_len);
+
+    /* wifi_pass */
+    size_t pass_len = sizeof(s_settings.wifi_pass);
+    nvs_get_str(h, KEY_WIFI_PASS, s_settings.wifi_pass, &pass_len);
+
+    /* Set default display_unit for all databoxes if not already set */
+    for (int i = 0; i < 10; i++) {
+        if (s_settings.databoxes[i].display_unit[0] == '\0') {
+            strncpy(s_settings.databoxes[i].display_unit, s_settings.databoxes[i].unit, sizeof(s_settings.databoxes[i].display_unit) - 1);
+            s_settings.databoxes[i].display_unit[sizeof(s_settings.databoxes[i].display_unit) - 1] = '\0';
+        }
+    }
+
     nvs_close(h);
 
     ESP_LOGI(TAG, "Settings loaded — brightness=%d  depth=%s  wind=%s",
@@ -188,5 +228,33 @@ void settings_set_use_transducer_offset(bool value) {
     nvs_commit(h);
     nvs_close(h);
     ESP_LOGD(TAG, "use_transducer_offset -> %d (saved)", (int)value);
+}
+
+void settings_set_databox_config(int index, const databox_config_t *config)
+{
+    if (index < 0 || index >= 10) return;
+    
+    memcpy(&s_settings.databoxes[index], config, sizeof(databox_config_t));
+    
+    nvs_handle_t h = open_nvs();
+    if (!h) return;
+    nvs_set_blob(h, KEY_DATABOXES, s_settings.databoxes, sizeof(s_settings.databoxes));
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "Databox %d config saved (PGN1=%lu)", index, (unsigned long)config->pgn1);
+}
+
+void settings_set_wifi_credentials(const char *ssid, const char *pass)
+{
+    strncpy(s_settings.wifi_ssid, ssid ? ssid : "", sizeof(s_settings.wifi_ssid) - 1);
+    strncpy(s_settings.wifi_pass, pass ? pass : "", sizeof(s_settings.wifi_pass) - 1);
+
+    nvs_handle_t h = open_nvs();
+    if (!h) return;
+    nvs_set_str(h, KEY_WIFI_SSID, s_settings.wifi_ssid);
+    nvs_set_str(h, KEY_WIFI_PASS, s_settings.wifi_pass);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "WiFi credentials updated (SSID: %s)", s_settings.wifi_ssid);
 }
 
