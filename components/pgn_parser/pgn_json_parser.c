@@ -10,22 +10,24 @@
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 #include <cJSON.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "PGN_PARSER";
 static char *pgn_db_buffer = NULL;
 static size_t pgn_db_size = 0;
+static SemaphoreHandle_t pgn_db_mutex = NULL;
 
-// Simple cache for the last parsed PGN object to speed up repeated lookups
+// Cache for the last parsed PGN object
 static int cached_pgn_number = -1;
 static cJSON *cached_pgn_json = NULL;
 
+static char *cached_pgn_id = NULL;
+static cJSON *cached_id_json = NULL;
+
 static void *cjson_psram_malloc(size_t size)
 {
-    void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
-    if (!ptr) {
-        ESP_LOGE("PSRAM", "Failed to allocate %zu bytes in PSRAM", size);
-    }
-    return ptr;
+    return heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
 }
 
 static void cjson_psram_free(void *ptr)
@@ -44,6 +46,10 @@ cJSON *pgn_json_load(const char *filepath)
         };
         cJSON_InitHooks(&hooks);
         hooks_initialized = true;
+    }
+
+    if (!pgn_db_mutex) {
+        pgn_db_mutex = xSemaphoreCreateMutex();
     }
 
     if (pgn_db_buffer) {
@@ -139,7 +145,6 @@ cJSON *pgn_get_definition(cJSON *pgn_db, int pgn_number)
 
     cJSON *pgn_obj = cJSON_Parse(start);
     if (!pgn_obj) {
-        ESP_LOGE(TAG, "Failed to parse on-demand PGN %d", pgn_number);
         xSemaphoreGive(pgn_db_mutex);
         return NULL;
     }
@@ -164,27 +169,68 @@ cJSON *pgn_get_definition_by_id(cJSON *pgn_db, const char *pgn_id)
     char *buffer = (char*)pgn_db;
     if (!buffer || !pgn_id) return NULL;
 
+    if (xSemaphoreTake(pgn_db_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return NULL;
+    }
+
+    // Check cache
+    if (cached_pgn_id && strcmp(cached_pgn_id, pgn_id) == 0 && cached_id_json) {
+        cJSON *res = cached_id_json;
+        xSemaphoreGive(pgn_db_mutex);
+        return res;
+    }
+
+    // Clear old cache
+    if (cached_id_json) {
+        cJSON_Delete(cached_id_json);
+        cached_id_json = NULL;
+    }
+    if (cached_pgn_id) {
+        free(cached_pgn_id);
+        cached_pgn_id = NULL;
+    }
+
     // Search for "Id": "pgn_id"
     char search_str[128];
     snprintf(search_str, sizeof(search_str), "\"Id\": \"%s\"", pgn_id);
     
     char *pos = strstr(buffer, search_str);
-    if (!pos) return NULL;
+    if (!pos) {
+        xSemaphoreGive(pgn_db_mutex);
+        return NULL;
+    }
 
     // Find the start of the object {
     char *start = pos;
     while (start > buffer && *start != '{') {
         start--;
     }
-    if (*start != '{') return NULL;
+    if (*start != '{') {
+        xSemaphoreGive(pgn_db_mutex);
+        return NULL;
+    }
 
     cJSON *pgn_obj = cJSON_Parse(start);
-    return pgn_obj; // Note: Caller must free or it leaks (but UI doesn't call this often)
+    if (!pgn_obj) {
+        xSemaphoreGive(pgn_db_mutex);
+        return NULL;
+    }
+
+    cached_id_json = pgn_obj;
+    cached_pgn_id = strdup(pgn_id);
+
+    cJSON *res = cached_id_json;
+    xSemaphoreGive(pgn_db_mutex);
+    return res;
 }
 
 void pgn_print_all_ids(cJSON *pgn_db)
 {
+    if (xSemaphoreTake(pgn_db_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        return;
+    }
     ESP_LOGI(TAG, "On-demand parsing active. Skipping full ID print to save memory.");
+    xSemaphoreGive(pgn_db_mutex);
 }
 
 void pgn_parse_systemtime(cJSON *pgn_def)
