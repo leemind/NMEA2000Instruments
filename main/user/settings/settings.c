@@ -246,8 +246,8 @@ void settings_set_databox_config(int index, const databox_config_t *config)
 
 void settings_set_wifi_credentials(const char *ssid, const char *pass)
 {
-    strncpy(s_settings.wifi_ssid, ssid ? ssid : "", sizeof(s_settings.wifi_ssid) - 1);
-    strncpy(s_settings.wifi_pass, pass ? pass : "", sizeof(s_settings.wifi_pass) - 1);
+    strlcpy(s_settings.wifi_ssid, ssid ? ssid : "", sizeof(s_settings.wifi_ssid));
+    strlcpy(s_settings.wifi_pass, pass ? pass : "", sizeof(s_settings.wifi_pass));
 
     nvs_handle_t h = open_nvs();
     if (!h) return;

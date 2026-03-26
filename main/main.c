@@ -138,5 +138,5 @@ void app_main() {
   wifi_init();
 
   // Start the CAN task
-  xTaskCreate(can_task, "can_task", 6 * 1024, NULL, 15, &can_TaskHandle);
+  xTaskCreatePinnedToCore(can_task, "can_task", 6 * 1024, NULL, 15, &can_TaskHandle, 0);
 }

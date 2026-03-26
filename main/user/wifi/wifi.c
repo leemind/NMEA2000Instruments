@@ -91,8 +91,8 @@ void wifi_init(void)
                 .threshold.authmode = WIFI_AUTH_WPA2_PSK,
             },
         };
-        strncpy((char*)wifi_config.sta.ssid, settings.wifi_ssid, sizeof(wifi_config.sta.ssid));
-        strncpy((char*)wifi_config.sta.password, settings.wifi_pass, sizeof(wifi_config.sta.password));
+        strlcpy((char*)wifi_config.sta.ssid, settings.wifi_ssid, sizeof(wifi_config.sta.ssid));
+        strlcpy((char*)wifi_config.sta.password, settings.wifi_pass, sizeof(wifi_config.sta.password));
         
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
         ESP_ERROR_CHECK(esp_wifi_start());
@@ -115,8 +115,8 @@ void wifi_connect(const char *ssid, const char *pass)
             .threshold.authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
-    strncpy((char*)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid));
-    strncpy((char*)wifi_config.sta.password, pass ? pass : "", sizeof(wifi_config.sta.password));
+    strlcpy((char*)wifi_config.sta.ssid, ssid, sizeof(wifi_config.sta.ssid));
+    strlcpy((char*)wifi_config.sta.password, pass ? pass : "", sizeof(wifi_config.sta.password));
 
     ESP_LOGI(TAG, "Connecting to SSID: %s", ssid);
     s_retry_num = 0;

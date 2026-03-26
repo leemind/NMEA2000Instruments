@@ -26,8 +26,8 @@
 #define LVGL_PORT_TASK_STACK_SIZE                                              \
   (8 * 1024) // The stack size of the LVGL timer task, in bytes
 #define LVGL_PORT_TASK_PRIORITY (2) // The priority of the LVGL timer task
-#define LVGL_PORT_TASK_CORE (-1)    // The core of the LVGL timer task,
-// `-1` means the don't specify the core
+#define LVGL_PORT_TASK_CORE (1)    // The core of the LVGL timer task,
+// `1` means the App CPU
 /**
  *
  * LVGL buffer related parameters, can be adjusted by users:

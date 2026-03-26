@@ -642,9 +642,16 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
 
       if (auto_depth_enabled && settings.autodepth_value > 0 &&
           depth_user < (float)settings.autodepth_value) {
-        if (lv_disp_get_scr_act(NULL) != ui_Depth) {
+        if (lv_disp_get_scr_act(NULL) == ui_Wind) {
           _ui_screen_change(&ui_Depth, LV_SCR_LOAD_ANIM_FADE_ON, 500, 0,
                             &ui_Depth_screen_init);
+        }
+      }
+            if (auto_depth_enabled && settings.autodepth_value > 0 &&
+          depth_user > (float)settings.autodepth_value) {
+        if (lv_disp_get_scr_act(NULL) == ui_Depth) {
+          _ui_screen_change(&ui_Wind, LV_SCR_LOAD_ANIM_FADE_ON, 500, 0,
+                            &ui_Wind_screen_init);
         }
       }
 
@@ -813,7 +820,7 @@ void can_task(void *arg) {
     ESP_LOGW(TAG, "Will display raw CAN messages only");
   } else {
     ESP_LOGI(TAG, "PGN database loaded successfully");
-    pgn_print_all_ids(pgn_database); // Log all available PGNs
+    // pgn_print_all_ids(pgn_database); // Log all available PGNs
   }
 
   // Create the FreeRTOS Queue for CAN messages before we enable TWAI
