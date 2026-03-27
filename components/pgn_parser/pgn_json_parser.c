@@ -8,6 +8,7 @@
 #include <cJSON.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 static const char *TAG = "PGN_PARSER";
 static char *pgn_db_path = NULL;
@@ -304,7 +305,9 @@ int pgn_search_by_description(const char *query, pgn_search_result_t *results, i
     
     /* We assume standard formatting where PGN and Description are nearby.
        For a more robust search, we use a simple state machine to find PGN and match Description. */
+    int yield_cnt = 0;
     while (fgets(line, 1024, file) && count < max_results) {
+        if (++yield_cnt % 100 == 0) vTaskDelay(1); // Yield every 100 lines to prevent WDT trip
         char *p_pgn = strstr(line, "\"PGN\":");
         if (p_pgn) {
             current_pgn = atoi(p_pgn + 6);

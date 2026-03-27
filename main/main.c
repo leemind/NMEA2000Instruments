@@ -24,6 +24,7 @@
  ******************************************************************************/
 #include "can.h"          // Header for CAN communication
 #include "can_debug_ui.h" // Header for dynamic CAN Debug UI init
+#include "ui_datapicker_ext.h" // Header for datapicker extensions
 #include "esp_littlefs.h" // Header for LittleFS file system operations
 #include "lvgl_port.h"    // Header for LVGL port initialization and locking
 #include "pwm.h" // Header for PWM initialization (used for backlight control)
@@ -115,6 +116,7 @@ void app_main() {
 
     /* Initialize dynamic UI components NOT drawn in SquareLine */
     can_debug_ui_init();
+    ui_datapicker_ext_init();
 
     /* Set up initial labels and units for all databoxes */
     can_init_ui_elements();

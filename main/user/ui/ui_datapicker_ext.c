@@ -6,11 +6,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
+#include "freertos/task.h"
 
 static const char *TAG = "UI_PICKER_EXT";
 
 static void populate_field_dropdown(lv_obj_t *dropdown, uint32_t pgn_num);
 static void ui_event_field_selected(lv_event_t *e);
+static void populate_search_list(const char *query);
 
 static int g_editing_index = -1;
 static lv_obj_t *ui_Pgn1Input;
@@ -25,6 +29,11 @@ static lv_obj_t *ui_Field2Label;
 static lv_obj_t *ui_AddSecondCheckbox;
 static lv_obj_t *ui_Keyboard;
 static lv_obj_t *ui_SearchList;
+static lv_timer_t *ui_SearchTimer = NULL;
+static char ui_SearchQuery[64];
+static QueueHandle_t ui_SearchQueue = NULL;
+static pgn_search_result_t ui_AsyncResults[10];
+static int ui_AsyncResultCount = 0;
 
 /* Event when a search result is clicked */
 static void ui_event_search_result_clicked(lv_event_t *e) {
@@ -40,42 +49,57 @@ static void ui_event_search_result_clicked(lv_event_t *e) {
     lv_textarea_set_text(ui_Pgn1Input, pgn_str);
     lv_obj_add_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
     
+    /* Move focus to Label input to stop search/keyboard loop */
+    if (ui_LabelInput) {
+        lv_obj_add_state(ui_LabelInput, LV_STATE_FOCUSED);
+        lv_keyboard_set_textarea(ui_Keyboard, ui_LabelInput);
+    }
+    
     /* Trigger field population */
     populate_field_dropdown(ui_Field1Dropdown, pgn);
     ui_event_field_selected(NULL);
 }
 
-/* Helper to populate search list based on query */
-static void populate_search_list(const char *query) {
+/* Callback to update search list from LVGL thread after background search */
+static void ui_update_search_list_async_cb(void * data) {
     if (!ui_SearchList) return;
     lv_obj_clean(ui_SearchList);
     
-    if (!query || strlen(query) < 2) {
-        lv_obj_add_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
-        return;
-    }
-
-    if (!pgn_database) return;
-
-    pgn_search_result_t results[10];
-    int match_count = pgn_search_by_description(query, results, 10);
-
-    for (int i = 0; i < match_count; i++) {
+    for (int i = 0; i < ui_AsyncResultCount; i++) {
         char buf[160];
-        snprintf(buf, sizeof(buf), "%d - %s", results[i].pgn, results[i].description);
+        snprintf(buf, sizeof(buf), "%d - %s", ui_AsyncResults[i].pgn, ui_AsyncResults[i].description);
         lv_obj_t *btn = lv_list_add_btn(ui_SearchList, NULL, buf);
         lv_obj_add_event_cb(btn, ui_event_search_result_clicked, LV_EVENT_CLICKED, NULL);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x000000), 0);
         lv_obj_set_style_text_color(btn, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_border_width(btn, 0, 0); // No extra border for buttons
+        lv_obj_set_style_border_width(btn, 0, 0);
     }
 
-    if (match_count > 0) {
+    if (ui_AsyncResultCount > 0 && lv_obj_has_state(ui_Pgn1Input, LV_STATE_FOCUSED)) {
         lv_obj_clear_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(ui_SearchList);
     } else {
         lv_obj_add_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
     }
+}
+
+/* Background task to perform search without blocking UI */
+static void ui_background_search_task(void *pvParameters) {
+    char query[64];
+    while (1) {
+        if (xQueueReceive(ui_SearchQueue, query, portMAX_DELAY) == pdTRUE) {
+            ui_AsyncResultCount = pgn_search_by_description(query, ui_AsyncResults, 10);
+            lv_async_call(ui_update_search_list_async_cb, NULL);
+        }
+    }
+}
+
+/* Debounce timer callback */
+static void ui_search_timer_cb(lv_timer_t * t) {
+    if (ui_SearchQueue) {
+        xQueueOverwrite(ui_SearchQueue, ui_SearchQuery);
+    }
+    ui_SearchTimer = NULL;
 }
 
 /* Event when a textarea is focused, to show keyboard */
@@ -163,19 +187,61 @@ static void populate_display_unit_dropdown(const char *source_unit) {
     }
 }
 
-/* Event when PGN 1 text changes */
 static void ui_event_pgn1_changed(lv_event_t *e) {
     const char *txt = lv_textarea_get_text(ui_Pgn1Input);
     
-    /* If it's a number, populate fields directly */
+    /* 1. Always process numeric PGNs (ensures dropdowns update even on programmatic change) */
     if (isdigit((unsigned char)txt[0])) {
         uint32_t pgn = atoi(txt);
         populate_field_dropdown(ui_Field1Dropdown, pgn);
         ui_event_field_selected(NULL);
+        
+        /* Cancel search timer if jumping to number */
+        if (ui_SearchTimer) {
+            lv_timer_del(ui_SearchTimer);
+            ui_SearchTimer = NULL;
+        }
+
+        /* If it's a full PGN, hide the search results */
+        if (strlen(txt) >= 5) {
+            lv_obj_add_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
     }
+
+    /* 2. Only trigger description search if the field is actively focused */
+    if (!lv_obj_has_state(ui_Pgn1Input, LV_STATE_FOCUSED)) {
+        lv_obj_add_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    ESP_LOGI("UI_DEBUG", "PGN1 Changed: '%s' (event: %d)", txt, lv_event_get_code(e));
     
-    /* Search descriptions */
-    populate_search_list(txt);
+    /* Cancel existing timer */
+    if (ui_SearchTimer) {
+        lv_timer_del(ui_SearchTimer);
+        ui_SearchTimer = NULL;
+    }
+
+    if (isdigit((unsigned char)txt[0])) {
+        /* If it's a number, populate fields directly */
+        uint32_t pgn = atoi(txt);
+        populate_field_dropdown(ui_Field1Dropdown, pgn);
+        ui_event_field_selected(NULL);
+        
+        /* If it's a full PGN, hide the search results */
+        if (strlen(txt) >= 5) {
+            lv_obj_add_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
+        }
+    } else if (strlen(txt) >= 2) {
+        /* Search by string: Use debounce to avoid blocking UI while typing */
+        strncpy(ui_SearchQuery, txt, sizeof(ui_SearchQuery) - 1);
+        ui_SearchQuery[sizeof(ui_SearchQuery) - 1] = '\0';
+        ui_SearchTimer = lv_timer_create(ui_search_timer_cb, 400, NULL);
+    } else {
+        /* Too short: hide list */
+        lv_obj_add_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 /* Event when Add Second checkbox changes */
@@ -195,7 +261,11 @@ static void ui_event_add_second_changed(lv_event_t *e) {
 }
 
 void ui_datapicker_ext_init(void) {
-    /* This should be called once, e.g. after ui_init() */
+    /* Initialize search queue and task if not already done */
+    if (ui_SearchQueue == NULL) {
+        ui_SearchQueue = xQueueCreate(1, 64);
+        xTaskCreatePinnedToCore(ui_background_search_task, "ui_search_task", 4096, NULL, 5, NULL, 0);
+    }
 }
 
 void ui_datapicker_ext_load(void) {
