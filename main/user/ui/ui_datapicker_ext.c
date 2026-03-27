@@ -295,7 +295,17 @@ void ui_datapicker_ext_load(void) {
 
         /* Create Keyboard */
         ui_Keyboard = lv_keyboard_create(ui_DatapickerScreen);
+        lv_obj_set_width(ui_Keyboard, 1024);
+        lv_obj_set_height(ui_Keyboard, 300);
+        lv_obj_set_align(ui_Keyboard, LV_ALIGN_BOTTOM_MID);
         lv_obj_add_flag(ui_Keyboard, LV_OBJ_FLAG_HIDDEN);
+        
+        lv_obj_set_style_bg_color(ui_Keyboard, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(ui_Keyboard, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_color(ui_Keyboard, lv_color_hex(0xAAAAAA), LV_PART_ITEMS | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(ui_Keyboard, 255, LV_PART_ITEMS | LV_STATE_DEFAULT);
+        lv_obj_set_style_text_font(ui_Keyboard, &lv_font_montserrat_28, LV_PART_ITEMS | LV_STATE_DEFAULT);
+
         lv_obj_add_event_cb(ui_Keyboard, ui_event_keyboard_ready, LV_EVENT_READY, NULL);
         lv_obj_add_event_cb(ui_Keyboard, ui_event_keyboard_ready, LV_EVENT_CANCEL, NULL);
 
