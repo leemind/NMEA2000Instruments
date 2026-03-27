@@ -26,6 +26,13 @@ extern struct cJSON *pgn_database;   // Global PGN database
 void can_task(void *arg);
 
 /**
+ * @brief Pause/Resume the CAN processing task.
+ * Used during OTA updates to reduce CPU load and prevent bus contention.
+ */
+void can_pause(void);
+void can_resume(void);
+
+/**
  * @brief Converts a hexadecimal string to an array of bytes.
  *
  * This function takes an input string representing hexadecimal values (with or without spaces)

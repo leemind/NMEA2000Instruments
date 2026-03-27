@@ -49,4 +49,9 @@ const char* ota_get_result_message(void);
  */
 const char* ota_get_remote_version_str(void);
 
+/**
+ * @brief Get the current firmware download progress (0-100)
+ */
+int ota_get_upgrade_progress(void);
+
 #endif // OTA_H

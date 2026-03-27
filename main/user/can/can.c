@@ -44,6 +44,7 @@ static QueueHandle_t can_rx_queue = NULL;
 
 cJSON *pgn_database = NULL;    // Global PGN database
 static const char *TAG = "CAN_DECODER";
+static bool g_can_paused = false;
 
 /* Forward declaration — defined later in this file */
 static void img_angle_anim_cb(void *obj, int32_t angle);
@@ -874,6 +875,15 @@ void can_task(void *arg) {
   uint32_t last_status_log_ms = 0;
 
   while (1) {
+    if (g_can_paused) {
+      // Drain queue to avoid overflow but don't process
+      can_msg_t junk;
+      while (xQueueReceive(can_rx_queue, &junk, 0) == pdTRUE);
+      esp_task_wdt_reset();
+      vTaskDelay(pdMS_TO_TICKS(100));
+      continue;
+    }
+
     uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
     if (now_ms - last_status_log_ms > 5000) {
       twai_node_status_t status;
@@ -920,6 +930,16 @@ void can_task(void *arg) {
     esp_task_wdt_reset();
     vTaskDelay(5 / portTICK_PERIOD_MS);
   }
+}
+
+void can_pause(void) {
+    ESP_LOGI(TAG, "CAN Processing Paused");
+    g_can_paused = true;
+}
+
+void can_resume(void) {
+    ESP_LOGI(TAG, "CAN Processing Resumed");
+    g_can_paused = false;
 }
 
 /**

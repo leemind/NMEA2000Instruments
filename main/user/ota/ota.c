@@ -9,11 +9,11 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_crt_bundle.h"
+#include "can.h"
 
 static const char *TAG = "OTA_MANAGER";
 
 // Default base URL for firmware updates
-// User can override this in their build or settings later
 #define FW_BASE_URL "https://firmware.sailstudio.tech/WindInstruments/"
 #define VERSION_FILE_URL FW_BASE_URL "version.txt"
 #define BINARY_FILE_URL  FW_BASE_URL "NMEA2000Instruments.bin"
@@ -21,6 +21,7 @@ static const char *TAG = "OTA_MANAGER";
 static ota_state_t current_state = OTA_STATE_IDLE;
 static char result_message[128] = "Ready";
 static char remote_version_str[32] = "";
+static int upgrade_progress = 0;
 
 // Forward declarations
 static void check_update_task(void *pvParameter);
@@ -41,6 +42,10 @@ const char* ota_get_result_message(void) {
 
 const char* ota_get_remote_version_str(void) {
     return remote_version_str;
+}
+
+int ota_get_upgrade_progress(void) {
+    return upgrade_progress;
 }
 
 /**
@@ -67,7 +72,8 @@ void ota_check_for_update(void) {
     if (current_state == OTA_STATE_CHECKING || current_state == OTA_STATE_UPDATING) {
         return;
     }
-    xTaskCreate(&check_update_task, "check_update_task", 8192, NULL, 5, NULL);
+    // Pin to Core 0, Priority 1 (Background)
+    xTaskCreatePinnedToCore(&check_update_task, "check_update_task", 8192, NULL, 1, NULL, 0);
 }
 
 void ota_start_upgrade(void) {
@@ -75,7 +81,8 @@ void ota_start_upgrade(void) {
         ESP_LOGW(TAG, "Upgrade called but no update available or already in progress");
         return;
     }
-    xTaskCreate(&upgrade_task, "upgrade_task", 8192, NULL, 5, NULL);
+    // Pin to Core 0, Priority 1 (Background)
+    xTaskCreatePinnedToCore(&upgrade_task, "upgrade_task", 8192, NULL, 1, NULL, 0);
 }
 
 static void check_update_task(void *pvParameter) {
@@ -130,10 +137,14 @@ static void check_update_task(void *pvParameter) {
 
 static void upgrade_task(void *pvParameter) {
     current_state = OTA_STATE_UPDATING;
-    strlcpy(result_message, "Downloading update...", sizeof(result_message));
+    upgrade_progress = 0;
+    strlcpy(result_message, "Downloading: 0%", sizeof(result_message));
     ESP_LOGI(TAG, "Starting upgrade from %s", BINARY_FILE_URL);
 
-    esp_http_client_config_t config = {
+    // Pause CAN task to ensure stability during flash write
+    can_pause();
+
+    esp_http_client_config_t http_config = {
         .url = BINARY_FILE_URL,
         .timeout_ms = 30000,
         .keep_alive_enable = true,
@@ -141,21 +152,55 @@ static void upgrade_task(void *pvParameter) {
     };
 
     esp_https_ota_config_t ota_config = {
-        .http_config = &config,
+        .http_config = &http_config,
     };
 
-    esp_err_t ret = esp_https_ota(&ota_config);
-    if (ret == ESP_OK) {
-        current_state = OTA_STATE_SUCCESS;
-        strlcpy(result_message, "Update successful! Rebooting...", sizeof(result_message));
-        ESP_LOGI(TAG, "OTA Success. Rebooting in 2s...");
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
-        esp_restart();
-    } else {
+    esp_https_ota_handle_t ota_handle = NULL;
+    esp_err_t err = esp_https_ota_begin(&ota_config, &ota_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "ESP HTTPS OTA Begin failed");
         current_state = OTA_STATE_FAILED;
-        snprintf(result_message, sizeof(result_message), "Update failed: %s", esp_err_to_name(ret));
-        ESP_LOGE(TAG, "Firmware upgrade failed!");
+        strlcpy(result_message, "Failed to connect to server", sizeof(result_message));
+        can_resume();
+        vTaskDelete(NULL);
+        return;
     }
 
+    while (1) {
+        err = esp_https_ota_perform(ota_handle);
+        if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
+            break;
+        }
+
+        // Update progress
+        int image_len_read = esp_https_ota_get_image_len_read(ota_handle);
+        int total_size = esp_https_ota_get_image_size(ota_handle);
+        if (total_size > 0) {
+            upgrade_progress = (image_len_read * 100) / total_size;
+            snprintf(result_message, sizeof(result_message), "Downloading: %d%%", upgrade_progress);
+        }
+    }
+
+    if (esp_https_ota_is_complete_data_received(ota_handle)) {
+        err = esp_https_ota_finish(ota_handle);
+        if (err == ESP_OK) {
+            current_state = OTA_STATE_SUCCESS;
+            strlcpy(result_message, "Update successful! Rebooting...", sizeof(result_message));
+            ESP_LOGI(TAG, "OTA Success. Rebooting in 2s...");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            esp_restart();
+        } else {
+            ESP_LOGE(TAG, "ESP HTTPS OTA finish failed");
+            current_state = OTA_STATE_FAILED;
+            strlcpy(result_message, "Update finished with errors", sizeof(result_message));
+        }
+    } else {
+        esp_https_ota_abort(ota_handle);
+        current_state = OTA_STATE_FAILED;
+        strlcpy(result_message, "Download interrupted", sizeof(result_message));
+        ESP_LOGE(TAG, "ESP HTTPS OTA failed");
+    }
+
+    can_resume();
     vTaskDelete(NULL);
 }
