@@ -65,6 +65,9 @@ static void populate_search_list(const char *query) {
         snprintf(buf, sizeof(buf), "%d - %s", results[i].pgn, results[i].description);
         lv_obj_t *btn = lv_list_add_btn(ui_SearchList, NULL, buf);
         lv_obj_add_event_cb(btn, ui_event_search_result_clicked, LV_EVENT_CLICKED, NULL);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(btn, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(btn, 0, 0); // No extra border for buttons
     }
 
     if (match_count > 0) {
@@ -152,6 +155,8 @@ static void populate_display_unit_dropdown(const char *source_unit) {
         lv_dropdown_set_options(ui_DisplayUnitDropdown, "L/h\ngph (US)\ngph (Imp)");
     } else if (strcmp(source_unit, "rad") == 0 || strcmp(source_unit, "deg") == 0) {
         lv_dropdown_set_options(ui_DisplayUnitDropdown, "deg\nrad");
+    } else if (strcmp(source_unit, "s") == 0) {
+        lv_dropdown_set_options(ui_DisplayUnitDropdown, "s\nmins\nhours\nhh:mm");
     } else {
         /* Default: only the source unit */
         lv_dropdown_set_options(ui_DisplayUnitDropdown, source_unit);
@@ -197,89 +202,152 @@ void ui_datapicker_ext_load(void) {
     if (!ui_DatapickerScreen) return;
     if (g_editing_index < 0) return;
 
-    /* Create UI elements dynamically if they don't exist */
     if (!ui_Pgn1Input) {
         /* Container for labels/inputs - widened for 1024x600 screen */
         lv_obj_t *cont = lv_obj_create(ui_DatapickerScreen);
-        lv_obj_set_size(cont, 950, 280);
+        lv_obj_set_size(cont, 1024, 500);
         lv_obj_set_align(cont, LV_ALIGN_TOP_MID);
-        lv_obj_set_y(cont, 10);
-        lv_obj_set_style_bg_opa(cont, 0, 0);
+        //lv_obj_set_y(cont, 10);
+        lv_obj_set_style_bg_color(cont, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(cont, 255, 0);
         lv_obj_set_style_border_width(cont, 0, 0);
 
         /* --- COLUMN 1 (LHS) --- */
         lv_obj_t *lbl = lv_label_create(cont);
         lv_label_set_text(lbl, "PGN 1:");
         lv_obj_set_pos(lbl, 10, 10);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
 
         ui_Pgn1Input = lv_textarea_create(cont);
         lv_obj_set_size(ui_Pgn1Input, 150, 40);
         lv_obj_set_pos(ui_Pgn1Input, 90, 0);
         lv_textarea_set_one_line(ui_Pgn1Input, true);
         lv_obj_add_event_cb(ui_Pgn1Input, ui_event_pgn1_changed, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_set_style_bg_color(ui_Pgn1Input, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(ui_Pgn1Input, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_color(ui_Pgn1Input, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(ui_Pgn1Input, 2, 0);
+        lv_obj_set_style_bg_color(ui_Pgn1Input, lv_color_hex(0xFFFFFF), LV_PART_CURSOR);
+        lv_obj_set_style_bg_opa(ui_Pgn1Input, 255, LV_PART_CURSOR);
 
         lbl = lv_label_create(cont);
         lv_label_set_text(lbl, "Field 1:");
         lv_obj_set_pos(lbl, 10, 60);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
 
         ui_Field1Dropdown = lv_dropdown_create(cont);
         lv_obj_set_size(ui_Field1Dropdown, 250, 40);
         lv_obj_set_pos(ui_Field1Dropdown, 90, 50);
         lv_obj_add_event_cb(ui_Field1Dropdown, ui_event_field_selected, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_set_style_bg_color(ui_Field1Dropdown, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(ui_Field1Dropdown, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_color(ui_Field1Dropdown, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(ui_Field1Dropdown, 2, 0);
+
+        /* Style the actual list that pops up */
+        lv_obj_t *f1_list = lv_dropdown_get_list(ui_Field1Dropdown);
+        lv_obj_set_style_bg_color(f1_list, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(f1_list, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_color(f1_list, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(f1_list, 2, 0);
 
         lbl = lv_label_create(cont);
         lv_label_set_text(lbl, "Label:");
         lv_obj_set_pos(lbl, 10, 110);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
 
         ui_LabelInput = lv_textarea_create(cont);
         lv_obj_set_size(ui_LabelInput, 200, 40);
         lv_obj_set_pos(ui_LabelInput, 90, 100);
         lv_textarea_set_one_line(ui_LabelInput, true);
+        lv_obj_set_style_bg_color(ui_LabelInput, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(ui_LabelInput, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_color(ui_LabelInput, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(ui_LabelInput, 2, 0);
+        lv_obj_set_style_bg_color(ui_LabelInput, lv_color_hex(0xFFFFFF), LV_PART_CURSOR);
+        lv_obj_set_style_bg_opa(ui_LabelInput, 255, LV_PART_CURSOR);
 
         lbl = lv_label_create(cont);
         lv_label_set_text(lbl, "Unit:");
         lv_obj_set_pos(lbl, 10, 160);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
 
         ui_UnitInput = lv_textarea_create(cont);
         lv_obj_set_size(ui_UnitInput, 100, 40);
         lv_obj_set_pos(ui_UnitInput, 90, 150);
         lv_textarea_set_one_line(ui_UnitInput, true);
         lv_obj_add_state(ui_UnitInput, LV_STATE_DISABLED); // Non-editable
+        lv_obj_set_style_bg_color(ui_UnitInput, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(ui_UnitInput, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_color(ui_UnitInput, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(ui_UnitInput, 2, 0);
+        lv_obj_set_style_bg_color(ui_UnitInput, lv_color_hex(0xFFFFFF), LV_PART_CURSOR);
+        lv_obj_set_style_bg_opa(ui_UnitInput, 255, LV_PART_CURSOR);
 
         lbl = lv_label_create(cont);
         lv_label_set_text(lbl, "Show As:");
         lv_obj_set_pos(lbl, 10, 210);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
 
         ui_DisplayUnitDropdown = lv_dropdown_create(cont);
         lv_obj_set_size(ui_DisplayUnitDropdown, 130, 40);
         lv_obj_set_pos(ui_DisplayUnitDropdown, 90, 200);
+        lv_obj_set_style_bg_color(ui_DisplayUnitDropdown, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(ui_DisplayUnitDropdown, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_color(ui_DisplayUnitDropdown, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(ui_DisplayUnitDropdown, 2, 0);
+
+        lv_obj_t *du_list = lv_dropdown_get_list(ui_DisplayUnitDropdown);
+        lv_obj_set_style_bg_color(du_list, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(du_list, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_color(du_list, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(du_list, 2, 0);
 
         ui_AddSecondCheckbox = lv_checkbox_create(cont);
         lv_checkbox_set_text(ui_AddSecondCheckbox, "Add field?");
         lv_obj_set_pos(ui_AddSecondCheckbox, 10, 250);
         lv_obj_add_event_cb(ui_AddSecondCheckbox, ui_event_add_second_changed, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_set_style_text_color(ui_AddSecondCheckbox, lv_color_hex(0xFFFFFF), 0);
 
         /* --- COLUMN 2 (RHS) --- */
         ui_Pgn2Label = lv_label_create(cont);
         lv_label_set_text(ui_Pgn2Label, "PGN 2:");
         lv_obj_set_pos(ui_Pgn2Label, 500, 10);
         lv_obj_add_flag(ui_Pgn2Label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_color(ui_Pgn2Label, lv_color_hex(0xFFFFFF), 0);
 
         ui_Pgn2Input = lv_textarea_create(cont);
         lv_obj_set_size(ui_Pgn2Input, 150, 40);
         lv_obj_set_pos(ui_Pgn2Input, 580, 0);
         lv_textarea_set_one_line(ui_Pgn2Input, true);
         lv_obj_add_flag(ui_Pgn2Input, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_color(ui_Pgn2Input, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(ui_Pgn2Input, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_color(ui_Pgn2Input, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(ui_Pgn2Input, 2, 0);
+        lv_obj_set_style_bg_color(ui_Pgn2Input, lv_color_hex(0xFFFFFF), LV_PART_CURSOR);
+        lv_obj_set_style_bg_opa(ui_Pgn2Input, 255, LV_PART_CURSOR);
 
         ui_Field2Label = lv_label_create(cont);
         lv_label_set_text(ui_Field2Label, "Field 2:");
         lv_obj_set_pos(ui_Field2Label, 500, 60);
         lv_obj_add_flag(ui_Field2Label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_text_color(ui_Field2Label, lv_color_hex(0xFFFFFF), 0);
 
         ui_Field2Dropdown = lv_dropdown_create(cont);
         lv_obj_set_size(ui_Field2Dropdown, 250, 40);
         lv_obj_set_pos(ui_Field2Dropdown, 580, 50);
         lv_obj_add_flag(ui_Field2Dropdown, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_color(ui_Field2Dropdown, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(ui_Field2Dropdown, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_color(ui_Field2Dropdown, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(ui_Field2Dropdown, 2, 0);
+
+        lv_obj_t *f2_list = lv_dropdown_get_list(ui_Field2Dropdown);
+        lv_obj_set_style_bg_color(f2_list, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(f2_list, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_color(f2_list, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(f2_list, 2, 0);
 
         /* Create Keyboard */
         ui_Keyboard = lv_keyboard_create(ui_DatapickerScreen);
@@ -308,6 +376,10 @@ void ui_datapicker_ext_load(void) {
         lv_obj_set_size(ui_SearchList, 400, 200);
         lv_obj_set_pos(ui_SearchList, 90, 45); // Just below Pgn1Input
         lv_obj_add_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_color(ui_SearchList, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_text_color(ui_SearchList, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_color(ui_SearchList, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_border_width(ui_SearchList, 2, 0);
     }
 
     /* Reset Keyboard state */

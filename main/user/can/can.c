@@ -339,6 +339,12 @@ static double convert_unit(double value, const char *from, const char *to) {
     if (strcmp(from, "deg") == 0 && strcmp(to, "rad") == 0) {
         return value * (M_PI / 180.0);
     }
+    /* Time: s to ... */
+    if (strcmp(from, "s") == 0) {
+        if (strcmp(to, "mins") == 0) return value / 60.0;
+        if (strcmp(to, "hours") == 0) return value / 3600.0;
+        if (strcmp(to, "hh:mm") == 0) return value; // Raw seconds, format later
+    }
 
     return value;
 }
@@ -377,10 +383,16 @@ static void handle_pgn_dynamic(cJSON *pgn_def, uint32_t pgn, const uint8_t *data
 
         if (update && !isnan(val)) {
             /* Apply unit conversion */
-            val = convert_unit(val, cfg->unit, cfg->display_unit);
-
             char buf[16];
-            snprintf(buf, sizeof(buf), "%.1f", val); // Default 1 decimal place
+            if (strcmp(cfg->display_unit, "hh:mm") == 0 && strcmp(cfg->unit, "s") == 0) {
+                int h = (int)val / 3600;
+                int m = ((int)val % 3600) / 60;
+                snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
+            } else {
+                /* Apply unit conversion */
+                val = convert_unit(val, cfg->unit, cfg->display_unit);
+                snprintf(buf, sizeof(buf), "%.1f", val); // Default 1 decimal place
+            }
 
             if (lvgl_port_lock(100)) {
                 if (g_databox_ui[i].value) lv_label_set_text(g_databox_ui[i].value, buf);
