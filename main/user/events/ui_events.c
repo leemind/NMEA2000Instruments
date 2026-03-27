@@ -164,3 +164,8 @@ void ui_event_datapicker_save(lv_event_t * e)
     _ui_screen_change(&ui_Wind, LV_SCR_LOAD_ANIM_FADE_ON, 500, 0, &ui_Wind_screen_init);
 }
 
+void ui_FirmwareButtonPressed(lv_event_t * e)
+{
+    ESP_LOGI(TAG, "Firmware button pressed");
+}
+
