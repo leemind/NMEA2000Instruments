@@ -18,6 +18,7 @@
 #include "screens/ui_Settings.h"
 #include "wifi.h"
 #include "ota.h"
+#include "can.h"
 #include "esp_app_format.h"
 #include "esp_ota_ops.h"
 
@@ -54,6 +55,7 @@ void set_depth_unit(lv_event_t * e)
 
     ESP_LOGI(TAG, "Depth unit -> %d (saved)", (int)value);
     settings_set_depth_unit((uint8_t)value);
+    can_init_ui_elements();
 }
 
 void set_wind_unit(lv_event_t * e)
@@ -69,6 +71,7 @@ void set_wind_unit(lv_event_t * e)
      * and persists to NVS so the value survives a reboot. */
     ESP_LOGI(TAG, "Wind unit -> %d (saved)", (int)value);
     settings_set_wind_unit((uint8_t)value);
+    can_init_ui_elements();
 }
 
 void set_autodepth_value(lv_event_t * e)
@@ -187,6 +190,7 @@ void ui_event_datapicker_load(lv_event_t * e)
 void ui_event_datapicker_save(lv_event_t * e)
 {
     ui_datapicker_ext_save();
+    can_init_ui_elements();
     _ui_screen_change(&ui_Wind, LV_SCR_LOAD_ANIM_FADE_ON, 500, 0, &ui_Wind_screen_init);
 }
 

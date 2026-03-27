@@ -130,8 +130,6 @@ static void compute_true_wind(void) {
       char tws_buf[8];
       snprintf(tws_buf, sizeof(tws_buf), "%.1f", tws * wind_convert[settings.wind_unit]);
       if (g_databox_ui[i].value) lv_label_set_text(g_databox_ui[i].value, tws_buf);
-      if (g_databox_ui[i].label) lv_label_set_text(g_databox_ui[i].label, cfg->label);
-      if (g_databox_ui[i].unit)  lv_label_set_text(g_databox_ui[i].unit,  wind_unit_str[settings.wind_unit]);
     } 
     else if (strcmp(cfg->field1_id, "TWA") == 0) {
       char twa_buf[10];
@@ -141,8 +139,6 @@ static void compute_true_wind(void) {
         snprintf(twa_buf, sizeof(twa_buf), "S %03.0f", 360.0f - twa_deg);
       }
       if (g_databox_ui[i].value) lv_label_set_text(g_databox_ui[i].value, twa_buf);
-      if (g_databox_ui[i].label) lv_label_set_text(g_databox_ui[i].label, cfg->label);
-      if (g_databox_ui[i].unit)  lv_label_set_text(g_databox_ui[i].unit,  cfg->unit);
     }
   }
 
@@ -388,8 +384,6 @@ static void handle_pgn_dynamic(cJSON *pgn_def, uint32_t pgn, const uint8_t *data
 
             if (lvgl_port_lock(100)) {
                 if (g_databox_ui[i].value) lv_label_set_text(g_databox_ui[i].value, buf);
-                if (g_databox_ui[i].label) lv_label_set_text(g_databox_ui[i].label, cfg->label);
-                if (g_databox_ui[i].unit)  lv_label_set_text(g_databox_ui[i].unit,  cfg->display_unit[0] ? cfg->display_unit : cfg->unit);
                 lvgl_port_unlock();
             }
         }
@@ -427,8 +421,6 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
   case 127250: {
     /* Vessel Heading */
     double heading_rad = get_pgn_field_value(pgn_def, data, data_len, "headingSensorReading");
-    double deviation_rad = get_pgn_field_value(pgn_def, data, data_len, "deviation");
-    double variation_rad = get_pgn_field_value(pgn_def, data, data_len, "variation");
     if (isnan(heading_rad))
       break;
 
@@ -528,7 +520,6 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
     if (lvgl_port_lock(100)) {
       if (ui_AWS) {
         lv_label_set_text(ui_AWS, spd_buf);
-        lv_label_set_text(ui_AWSUnit, wind_unit_str[settings.wind_unit]);
       }
       if (ui_AWA) {
         lv_label_set_text(ui_AWA, ang_buf);
@@ -630,9 +621,6 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
       /* Auto-Depth Screen Populating */
       if (uic_DepthBig)
         lv_label_set_text(uic_DepthBig, dep_buf);
-      if (uic_BigDepthUnits)
-        lv_label_set_text(uic_BigDepthUnits,
-                          depth_unit_str[settings.depth_unit]);
 
       /* Auto-Depth Screen Switch Logic */
       bool auto_depth_enabled = false;
@@ -930,6 +918,35 @@ void can_task(void *arg) {
     esp_task_wdt_reset();
     vTaskDelay(5 / portTICK_PERIOD_MS);
   }
+}
+
+void can_init_ui_elements(void) {
+    app_settings_t settings = settings_get();
+    init_databox_ui_pointers();
+
+    if (lvgl_port_lock(100)) {
+        // 1. Dynamic Databoxes
+        for (int i = 0; i < 10; i++) {
+            databox_config_t *cfg = &settings.databoxes[i];
+            if (g_databox_ui[i].label) lv_label_set_text(g_databox_ui[i].label, cfg->label);
+            
+            // Handle unit display (prefer display_unit if set, otherwise raw unit)
+            const char* unit_str = cfg->display_unit[0] ? cfg->display_unit : cfg->unit;
+            
+            // Special case for computed True Wind values (they follow global settings)
+            if (cfg->pgn1 == 0xFFFFFFFF && strcmp(cfg->field1_id, "TWS") == 0) {
+                unit_str = wind_unit_str[settings.wind_unit];
+            }
+            
+            if (g_databox_ui[i].unit) lv_label_set_text(g_databox_ui[i].unit, unit_str);
+        }
+
+        // 2. Fixed UI elements
+        if (ui_AWSUnit) lv_label_set_text(ui_AWSUnit, wind_unit_str[settings.wind_unit]);
+        if (ui_BigDepthUnits) lv_label_set_text(ui_BigDepthUnits, depth_unit_str[settings.depth_unit]);
+        
+        lvgl_port_unlock();
+    }
 }
 
 void can_pause(void) {

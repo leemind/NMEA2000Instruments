@@ -67,3 +67,17 @@ void pgn_print_all_ids(cJSON *pgn_db);
  * Example: Parse specific PGN and extract fields
  */
 void pgn_parse_systemtime(cJSON *pgn_def);
+
+/**
+ * Results for streaming PGN search
+ */
+typedef struct {
+    int pgn;
+    char description[128];
+} pgn_search_result_t;
+
+/**
+ * Search PGN database by description query (streaming).
+ * Returns the number of results found.
+ */
+int pgn_search_by_description(const char *query, pgn_search_result_t *results, int max_results);

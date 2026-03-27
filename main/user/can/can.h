@@ -26,6 +26,12 @@ extern struct cJSON *pgn_database;   // Global PGN database
 void can_task(void *arg);
 
 /**
+ * @brief Initialize all static UI elements (Labels and Units) for databoxes.
+ * Call this on boot and after settings changes.
+ */
+void can_init_ui_elements(void);
+
+/**
  * @brief Pause/Resume the CAN processing task.
  * Used during OTA updates to reduce CPU load and prevent bus contention.
  */

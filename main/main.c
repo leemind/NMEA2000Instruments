@@ -116,6 +116,9 @@ void app_main() {
     /* Initialize dynamic UI components NOT drawn in SquareLine */
     can_debug_ui_init();
 
+    /* Set up initial labels and units for all databoxes */
+    can_init_ui_elements();
+
     // Release the mutex after LVGL operations are complete
     // This allows other tasks to access the LVGL port.
     lvgl_port_unlock();

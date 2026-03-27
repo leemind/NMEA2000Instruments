@@ -57,26 +57,14 @@ static void populate_search_list(const char *query) {
 
     if (!pgn_database) return;
 
-    cJSON *pgns = cJSON_GetObjectItem(pgn_database, "pgns");
-    if (!pgns) return;
+    pgn_search_result_t results[10];
+    int match_count = pgn_search_by_description(query, results, 10);
 
-    int match_count = 0;
-    cJSON *pgn_def;
-    cJSON_ArrayForEach(pgn_def, pgns) {
-        cJSON *pgn_val = cJSON_GetObjectItem(pgn_def, "PGN");
-        cJSON *desc_val = cJSON_GetObjectItem(pgn_def, "Description");
-        
-        if (pgn_val && desc_val && desc_val->valuestring) {
-            /* Case-insensitive search */
-            if (strcasestr(desc_val->valuestring, query)) {
-                char buf[128];
-                snprintf(buf, sizeof(buf), "%d - %s", pgn_val->valueint, desc_val->valuestring);
-                lv_obj_t *btn = lv_list_add_btn(ui_SearchList, NULL, buf);
-                lv_obj_add_event_cb(btn, ui_event_search_result_clicked, LV_EVENT_CLICKED, NULL);
-                match_count++;
-            }
-        }
-        if (match_count >= 10) break; // Limit results
+    for (int i = 0; i < match_count; i++) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "%d - %s", results[i].pgn, results[i].description);
+        lv_obj_t *btn = lv_list_add_btn(ui_SearchList, NULL, buf);
+        lv_obj_add_event_cb(btn, ui_event_search_result_clicked, LV_EVENT_CLICKED, NULL);
     }
 
     if (match_count > 0) {

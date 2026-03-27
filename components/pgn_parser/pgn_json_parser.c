@@ -78,7 +78,6 @@ static char *find_json_object_in_file(const char *filepath, const char *search_p
         return NULL;
     }
 
-    char *found_pos = NULL;
     long found_offset = -1;
     size_t bytes_read;
     long current_offset = 0;
@@ -286,4 +285,56 @@ void pgn_parse_systemtime(cJSON *pgn_def)
             }
         }
     }
+}
+
+int pgn_search_by_description(const char *query, pgn_search_result_t *results, int max_results) {
+    if (!pgn_db_path || !query || strlen(query) < 2) return 0;
+    
+    FILE *file = fopen(pgn_db_path, "r");
+    if (!file) return 0;
+
+    char *line = malloc(1024);
+    if (!line) {
+        fclose(file);
+        return 0;
+    }
+
+    int count = 0;
+    int current_pgn = 0;
+    
+    /* We assume standard formatting where PGN and Description are nearby.
+       For a more robust search, we use a simple state machine to find PGN and match Description. */
+    while (fgets(line, 1024, file) && count < max_results) {
+        char *p_pgn = strstr(line, "\"PGN\":");
+        if (p_pgn) {
+            current_pgn = atoi(p_pgn + 6);
+        }
+
+        char *p_desc = strstr(line, "\"Description\":");
+        if (p_desc) {
+            char *start = strchr(p_desc + 14, '\"');
+            if (start) {
+                start++;
+                char *end = strchr(start, '\"');
+                if (end) {
+                    size_t len = end - start;
+                    char desc_val[128];
+                    if (len > 127) len = 127;
+                    strncpy(desc_val, start, len);
+                    desc_val[len] = '\0';
+
+                    if (strcasestr(desc_val, query)) {
+                        results[count].pgn = current_pgn;
+                        strncpy(results[count].description, desc_val, 127);
+                        results[count].description[127] = '\0';
+                        count++;
+                    }
+                }
+            }
+        }
+    }
+
+    free(line);
+    fclose(file);
+    return count;
 }
