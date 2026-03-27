@@ -32,6 +32,7 @@
 #include "gt911.h"  // Header for touch screen operations (GT911)
 #include "ui.h"           // Header for user interface initialization
 #include "wifi.h"         // WiFi driver
+#include "ota.h"          // OTA manager
 
 #include "esp_log.h"
 #include "esp_err.h"
@@ -136,6 +137,9 @@ void app_main() {
 
   // Start the WiFi system
   wifi_init();
+
+  // Initialize OTA system
+  ota_init();
 
   // Start the CAN task
   xTaskCreatePinnedToCore(can_task, "can_task", 6 * 1024, NULL, 15, &can_TaskHandle, 0);

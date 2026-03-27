@@ -1,7 +1,3 @@
-/*
- * pgn_json_parser.c - Implementation of JSON PGN parser using cJSON
- */
-
 #include "pgn_json_parser.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,8 +10,7 @@
 #include "freertos/semphr.h"
 
 static const char *TAG = "PGN_PARSER";
-static char *pgn_db_buffer = NULL;
-static size_t pgn_db_size = 0;
+static char *pgn_db_path = NULL;
 static SemaphoreHandle_t pgn_db_mutex = NULL;
 
 // Cache for the last parsed PGN object
@@ -52,60 +47,114 @@ cJSON *pgn_json_load(const char *filepath)
         pgn_db_mutex = xSemaphoreCreateMutex();
     }
 
-    if (pgn_db_buffer) {
-        free(pgn_db_buffer);
-        pgn_db_buffer = NULL;
-    }
-
     FILE *file = fopen(filepath, "r");
     if (!file) {
         ESP_LOGE(TAG, "Failed to open file: %s", filepath);
         return NULL;
     }
-
-    fseek(file, 0, SEEK_END);
-    long file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    if (file_size <= 0) {
-        ESP_LOGE(TAG, "File size is 0 or negative: %ld", file_size);
-        fclose(file);
-        return NULL;
-    }
-
-    pgn_db_buffer = heap_caps_malloc(file_size + 1, MALLOC_CAP_SPIRAM);
-    if (!pgn_db_buffer) {
-        ESP_LOGE(TAG, "Memory allocation failed for database buffer (size %ld)", file_size);
-        fclose(file);
-        return NULL;
-    }
-
-    size_t read_bytes = fread(pgn_db_buffer, 1, file_size, file);
-    if (read_bytes != file_size) {
-        ESP_LOGE(TAG, "Failed to read entire file (read %zu of %ld)", read_bytes, file_size);
-        free(pgn_db_buffer);
-        pgn_db_buffer = NULL;
-        fclose(file);
-        return NULL;
-    }
-
-    pgn_db_buffer[file_size] = '\0';
-    pgn_db_size = file_size;
     fclose(file);
 
-    ESP_LOGI(TAG, "Successfully loaded %ld bytes of PGN database into PSRAM string", file_size);
+    if (pgn_db_path) {
+        free(pgn_db_path);
+    }
+    pgn_db_path = strdup(filepath);
+
+    ESP_LOGI(TAG, "PGN database path set: %s (On-demand streaming enabled)", filepath);
     
-    // Return a dummy cJSON object so caller thinks it worked
-    // We'll use the buffer for actual lookups
-    return (cJSON*)pgn_db_buffer; 
+    // Return a dummy non-NULL pointer to satisfy the caller
+    return (cJSON*)pgn_db_path; 
+}
+
+static char *find_json_object_in_file(const char *filepath, const char *search_pattern)
+{
+    FILE *file = fopen(filepath, "r");
+    if (!file) return NULL;
+
+    const size_t chunk_size = 4096;
+    const size_t overlap = 128; // To handle patterns split across chunks
+    char *chunk = heap_caps_malloc(chunk_size + 1, MALLOC_CAP_SPIRAM);
+    if (!chunk) {
+        fclose(file);
+        return NULL;
+    }
+
+    char *found_pos = NULL;
+    long found_offset = -1;
+    size_t bytes_read;
+    long current_offset = 0;
+
+    while ((bytes_read = fread(chunk, 1, chunk_size, file)) > 0) {
+        chunk[bytes_read] = '\0';
+        char *p = strstr(chunk, search_pattern);
+        if (p) {
+            found_offset = current_offset + (p - chunk);
+            break;
+        }
+        
+        // Move back slightly for overlap, unless we reached EOF
+        if (bytes_read == chunk_size) {
+            fseek(file, -overlap, SEEK_CUR);
+            current_offset += (chunk_size - (long)overlap);
+        } else {
+            current_offset += (long)bytes_read;
+        }
+    }
+
+    if (found_offset == -1) {
+        heap_caps_free(chunk);
+        fclose(file);
+        return NULL;
+    }
+
+    // Found the pattern. Now find the enclosing { }
+    // Backtrack to find '{'
+    fseek(file, found_offset, SEEK_SET);
+    int c;
+    long start_pos = found_offset;
+    while (start_pos > 0) {
+        fseek(file, --start_pos, SEEK_SET);
+        c = fgetc(file);
+        if (c == '{') break;
+    }
+
+    // Now read forward to find matching '}'
+    fseek(file, start_pos, SEEK_SET);
+    int brace_depth = 0;
+    bool in_string = false;
+    long end_pos = start_pos;
+    
+    while ((c = fgetc(file)) != EOF) {
+        end_pos++;
+        if (c == '"') {
+            in_string = !in_string;
+        } else if (!in_string) {
+            if (c == '{') brace_depth++;
+            else if (c == '}') {
+                brace_depth--;
+                if (brace_depth == 0) break;
+            }
+        }
+        if (end_pos - start_pos > 16384) break; // Safety limit
+    }
+
+    size_t obj_size = end_pos - start_pos;
+    char *obj_buf = heap_caps_malloc(obj_size + 1, MALLOC_CAP_SPIRAM);
+    if (obj_buf) {
+        fseek(file, start_pos, SEEK_SET);
+        fread(obj_buf, 1, obj_size, file);
+        obj_buf[obj_size] = '\0';
+    }
+
+    heap_caps_free(chunk);
+    fclose(file);
+    return obj_buf;
 }
 
 cJSON *pgn_get_definition(cJSON *pgn_db, int pgn_number)
 {
-    char *buffer = (char*)pgn_db;
-    if (!buffer) return NULL;
+    if (!pgn_db_path) return NULL;
 
-    if (xSemaphoreTake(pgn_db_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+    if (xSemaphoreTake(pgn_db_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
         return NULL;
     }
 
@@ -123,35 +172,20 @@ cJSON *pgn_get_definition(cJSON *pgn_db, int pgn_number)
         cached_pgn_number = -1;
     }
 
-    // Search
+    // Search in file
     char search_str[32];
     snprintf(search_str, sizeof(search_str), "\"PGN\": %d", pgn_number);
     
-    char *pos = strstr(buffer, search_str);
-    if (!pos) {
+    char *json_str = find_json_object_in_file(pgn_db_path, search_str);
+    if (!json_str) {
         xSemaphoreGive(pgn_db_mutex);
         return NULL;
     }
 
-    char *start = pos;
-    while (start > buffer && *start != '{') {
-        start--;
-    }
+    cJSON *pgn_obj = cJSON_Parse(json_str);
+    heap_caps_free(json_str);
 
-    if (*start != '{') {
-        xSemaphoreGive(pgn_db_mutex);
-        return NULL;
-    }
-
-    cJSON *pgn_obj = cJSON_Parse(start);
     if (!pgn_obj) {
-        xSemaphoreGive(pgn_db_mutex);
-        return NULL;
-    }
-
-    cJSON *pgn_val = cJSON_GetObjectItem(pgn_obj, "PGN");
-    if (!pgn_val || pgn_val->valueint != pgn_number) {
-        cJSON_Delete(pgn_obj);
         xSemaphoreGive(pgn_db_mutex);
         return NULL;
     }
@@ -166,10 +200,9 @@ cJSON *pgn_get_definition(cJSON *pgn_db, int pgn_number)
 
 cJSON *pgn_get_definition_by_id(cJSON *pgn_db, const char *pgn_id)
 {
-    char *buffer = (char*)pgn_db;
-    if (!buffer || !pgn_id) return NULL;
+    if (!pgn_db_path || !pgn_id) return NULL;
 
-    if (xSemaphoreTake(pgn_db_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+    if (xSemaphoreTake(pgn_db_mutex, pdMS_TO_TICKS(500)) != pdTRUE) {
         return NULL;
     }
 
@@ -194,23 +227,15 @@ cJSON *pgn_get_definition_by_id(cJSON *pgn_db, const char *pgn_id)
     char search_str[128];
     snprintf(search_str, sizeof(search_str), "\"Id\": \"%s\"", pgn_id);
     
-    char *pos = strstr(buffer, search_str);
-    if (!pos) {
+    char *json_str = find_json_object_in_file(pgn_db_path, search_str);
+    if (!json_str) {
         xSemaphoreGive(pgn_db_mutex);
         return NULL;
     }
 
-    // Find the start of the object {
-    char *start = pos;
-    while (start > buffer && *start != '{') {
-        start--;
-    }
-    if (*start != '{') {
-        xSemaphoreGive(pgn_db_mutex);
-        return NULL;
-    }
+    cJSON *pgn_obj = cJSON_Parse(json_str);
+    heap_caps_free(json_str);
 
-    cJSON *pgn_obj = cJSON_Parse(start);
     if (!pgn_obj) {
         xSemaphoreGive(pgn_db_mutex);
         return NULL;
@@ -226,40 +251,39 @@ cJSON *pgn_get_definition_by_id(cJSON *pgn_db, const char *pgn_id)
 
 void pgn_print_all_ids(cJSON *pgn_db)
 {
-    if (xSemaphoreTake(pgn_db_mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        return;
-    }
     ESP_LOGI(TAG, "On-demand parsing active. Skipping full ID print to save memory.");
-    xSemaphoreGive(pgn_db_mutex);
 }
 
 void pgn_parse_systemtime(cJSON *pgn_def)
 {
-    if (!pgn_def) {
-        ESP_LOGE(TAG, "Invalid PGN definition");
-        return;
-    }
+    if (!pgn_def) return;
 
     cJSON *pgn_num = cJSON_GetObjectItem(pgn_def, "PGN");
     cJSON *id = cJSON_GetObjectItem(pgn_def, "Id");
     cJSON *fields = cJSON_GetObjectItem(pgn_def, "Fields");
 
-    ESP_LOGI(TAG, "PGN: %d (%s)", pgn_num->valueint, id->valuestring);
-    ESP_LOGI(TAG, "Fields:");
+    if (pgn_num && id) {
+        ESP_LOGI(TAG, "PGN: %d (%s)", pgn_num->valueint, id->valuestring);
+    }
 
-    cJSON *field = NULL;
-    cJSON_ArrayForEach(field, fields) {
-        cJSON *order = cJSON_GetObjectItem(field, "Order");
-        cJSON *field_id = cJSON_GetObjectItem(field, "Id");
-        cJSON *name = cJSON_GetObjectItem(field, "Name");
-        cJSON *bit_length = cJSON_GetObjectItem(field, "BitLength");
-        cJSON *resolution = cJSON_GetObjectItem(field, "Resolution");
+    if (fields) {
+        ESP_LOGI(TAG, "Fields:");
+        cJSON *field = NULL;
+        cJSON_ArrayForEach(field, fields) {
+            cJSON *order = cJSON_GetObjectItem(field, "Order");
+            cJSON *field_id = cJSON_GetObjectItem(field, "Id");
+            cJSON *name = cJSON_GetObjectItem(field, "Name");
+            cJSON *bit_length = cJSON_GetObjectItem(field, "BitLength");
+            cJSON *resolution = cJSON_GetObjectItem(field, "Resolution");
 
-        ESP_LOGI(TAG, "  [%d] %s (%s) - %d bits @ res %.4f",
-                 order->valueint,
-                 field_id->valuestring,
-                 name->valuestring,
-                 bit_length->valueint,
-                 resolution->valuedouble);
+            if (order && field_id && name && bit_length && resolution) {
+                ESP_LOGI(TAG, "  [%d] %s (%s) - %d bits @ res %.4f",
+                         order->valueint,
+                         field_id->valuestring,
+                         name->valuestring,
+                         bit_length->valueint,
+                         resolution->valuedouble);
+            }
+        }
     }
 }

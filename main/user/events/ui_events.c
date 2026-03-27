@@ -17,6 +17,9 @@
 #include "screens/ui_DatapickerScreen.h"
 #include "screens/ui_Settings.h"
 #include "wifi.h"
+#include "ota.h"
+#include "esp_app_format.h"
+#include "esp_ota_ops.h"
 
 static const char *TAG       = "UI_EVENTS";
 /* ---------------------------------------------------------------------------
@@ -92,6 +95,24 @@ static void wifi_timer_cb(lv_timer_t * t)
     if (ui_Label1) {
         lv_label_set_text(ui_Label1, wifi_get_status_str());
     }
+
+    /* Update OTA status on Settings screen */
+    if (ui_Settings && !lv_obj_has_flag(ui_Settings, LV_OBJ_FLAG_HIDDEN)) {
+        if (ui_FirmwareResultText) {
+            lv_label_set_text(ui_FirmwareResultText, ota_get_result_message());
+        }
+        
+        if (ui_FirmwareButtonLabel) {
+            ota_state_t state = ota_get_state();
+            if (state == OTA_STATE_UPDATE_AVAILABLE) {
+                lv_label_set_text(ui_FirmwareButtonLabel, "Upgrade");
+            } else if (state == OTA_STATE_UPDATING) {
+                lv_label_set_text(ui_FirmwareButtonLabel, "---");
+            } else {
+                lv_label_set_text(ui_FirmwareButtonLabel, "Check");
+            }
+        }
+    }
 }
 
 void wifi_credentials_changed(lv_event_t * e)
@@ -111,6 +132,11 @@ void settings_screen_loaded(lv_event_t * e)
     lv_dropdown_set_selected(uic_DepthUnitChoice, (int32_t)settings_get().depth_unit);
     lv_dropdown_set_selected(uic_WindUnitsChoice, (int32_t)settings_get().wind_unit);
     lv_roller_set_selected(uic_AutoDepthValue, (uint16_t)settings_get().autodepth_value, LV_ANIM_OFF);
+
+    /* Update Firmware Version display */
+    if (ui_FirmwareVersionValue) {
+        lv_label_set_text(ui_FirmwareVersionValue, esp_app_get_description()->version);
+    }
 
     /* Populate WiFi credentials */
     app_settings_t settings = settings_get();
@@ -166,6 +192,13 @@ void ui_event_datapicker_save(lv_event_t * e)
 
 void ui_FirmwareButtonPressed(lv_event_t * e)
 {
-    ESP_LOGI(TAG, "Firmware button pressed");
+    ota_state_t state = ota_get_state();
+    ESP_LOGI(TAG, "Firmware button pressed, state=%d", state);
+
+    if (state == OTA_STATE_IDLE || state == OTA_STATE_UP_TO_DATE || state == OTA_STATE_FAILED) {
+        ota_check_for_update();
+    } else if (state == OTA_STATE_UPDATE_AVAILABLE) {
+        ota_start_upgrade();
+    }
 }
 
