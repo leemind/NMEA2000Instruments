@@ -63,6 +63,16 @@ static void ui_event_search_result_clicked(lv_event_t *e) {
 /* Callback to update search list from LVGL thread after background search */
 static void ui_update_search_list_async_cb(void * data) {
     if (!ui_SearchList) return;
+
+    /* Don't refresh the list if the user is currently touching/clicking a result */
+    uint32_t child_cnt = lv_obj_get_child_cnt(ui_SearchList);
+    for (uint32_t i = 0; i < child_cnt; i++) {
+        if (lv_obj_has_state(lv_obj_get_child(ui_SearchList, i), LV_STATE_PRESSED)) {
+            ESP_LOGI("UI_DEBUG", "Interaction active, skipping list refresh");
+            return; 
+        }
+    }
+
     lv_obj_clean(ui_SearchList);
     
     for (int i = 0; i < ui_AsyncResultCount; i++) {
@@ -209,38 +219,28 @@ static void ui_event_pgn1_changed(lv_event_t *e) {
         return;
     }
 
-    /* 2. Only trigger description search if the field is actively focused */
-    if (!lv_obj_has_state(ui_Pgn1Input, LV_STATE_FOCUSED)) {
+    /* 2. Hide list if too short */
+    if (strlen(txt) < 2) {
         lv_obj_add_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
+        if (ui_SearchTimer) {
+            lv_timer_del(ui_SearchTimer);
+            ui_SearchTimer = NULL;
+        }
         return;
     }
 
-    ESP_LOGI("UI_DEBUG", "PGN1 Changed: '%s' (event: %d)", txt, lv_event_get_code(e));
-    
-    /* Cancel existing timer */
-    if (ui_SearchTimer) {
-        lv_timer_del(ui_SearchTimer);
-        ui_SearchTimer = NULL;
-    }
-
-    if (isdigit((unsigned char)txt[0])) {
-        /* If it's a number, populate fields directly */
-        uint32_t pgn = atoi(txt);
-        populate_field_dropdown(ui_Field1Dropdown, pgn);
-        ui_event_field_selected(NULL);
-        
-        /* If it's a full PGN, hide the search results */
-        if (strlen(txt) >= 5) {
-            lv_obj_add_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
+    /* 3. Description search - only if focused and interaction not pending */
+    if (lv_obj_has_state(ui_Pgn1Input, LV_STATE_FOCUSED)) {
+        /* Cancel existing timer */
+        if (ui_SearchTimer) {
+            lv_timer_del(ui_SearchTimer);
+            ui_SearchTimer = NULL;
         }
-    } else if (strlen(txt) >= 2) {
+
         /* Search by string: Use debounce to avoid blocking UI while typing */
         strncpy(ui_SearchQuery, txt, sizeof(ui_SearchQuery) - 1);
         ui_SearchQuery[sizeof(ui_SearchQuery) - 1] = '\0';
         ui_SearchTimer = lv_timer_create(ui_search_timer_cb, 400, NULL);
-    } else {
-        /* Too short: hide list */
-        lv_obj_add_flag(ui_SearchList, LV_OBJ_FLAG_HIDDEN);
     }
 }
 

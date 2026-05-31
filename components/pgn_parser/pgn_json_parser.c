@@ -14,10 +14,31 @@ static const char *TAG = "PGN_PARSER";
 static char *pgn_db_path = NULL;
 static SemaphoreHandle_t pgn_db_mutex = NULL;
 
-// Cache for the last parsed PGN object
-static int cached_pgn_number = -1;
-static cJSON *cached_pgn_json = NULL;
+// The full 408 KB DB does not fit in one contiguous PSRAM block (fragmented by
+// LVGL framebuffers). Instead we build a small in-RAM index mapping each PGN
+// number to the byte offset of its '{' in the file, keep the file open, and
+// seek straight to the object on lookup. This avoids the old per-call
+// from-start re-scan (which cost ~171 ms) while using only a few KB of RAM.
+typedef struct {
+    int   pgn;
+    long  offset; // byte offset of the object's opening '{'
+    cJSON *def;   // lazily-parsed definition, cached after first lookup (NULL until then)
+} pgn_index_entry_t;
 
+static pgn_index_entry_t *pgn_index = NULL;
+static int pgn_index_count = 0;
+static int pgn_index_cap   = 0;
+static FILE *pgn_db_file   = NULL; // kept open; accessed only under pgn_db_mutex
+
+// Lazy per-PGN definition cache. Each distinct PGN is parsed once on first
+// sight and kept (cJSON uses many small allocations, which fit fine in
+// fragmented PSRAM). Real applications use far fewer than the cap; beyond it we
+// stop caching and reuse a single scratch slot to avoid unbounded growth.
+#define PGN_DEF_CACHE_CAP 48
+static int   cached_def_count   = 0;     // number of index entries with def != NULL
+static cJSON *uncached_scratch  = NULL;   // holds the last over-cap parse (freed on next over-cap miss)
+
+// Single-entry cache for the rare by-id path (example/UI use only).
 static char *cached_pgn_id = NULL;
 static cJSON *cached_id_json = NULL;
 
@@ -48,106 +69,172 @@ cJSON *pgn_json_load(const char *filepath)
         pgn_db_mutex = xSemaphoreCreateMutex();
     }
 
+    // Close any previously-open handle / index (reload support).
+    if (pgn_db_file) {
+        fclose(pgn_db_file);
+        pgn_db_file = NULL;
+    }
+    if (pgn_index) {
+        for (int i = 0; i < pgn_index_count; i++) {
+            if (pgn_index[i].def) cJSON_Delete(pgn_index[i].def);
+        }
+        heap_caps_free(pgn_index);
+        pgn_index = NULL;
+    }
+    if (uncached_scratch) {
+        cJSON_Delete(uncached_scratch);
+        uncached_scratch = NULL;
+    }
+    pgn_index_count = 0;
+    pgn_index_cap = 0;
+    cached_def_count = 0;
+
     FILE *file = fopen(filepath, "r");
     if (!file) {
         ESP_LOGE(TAG, "Failed to open file: %s", filepath);
         return NULL;
     }
-    fclose(file);
+
+    // Build the PGN -> object-offset index in a single sequential pass.
+    // The DB is pretty-printed (one field per line); the line whose first
+    // non-space char is '{' opens an object, and "PGN" is its first field, so
+    // the most recent '{' line before a "PGN" line is that object's start.
+    // We track byte offsets by summing line lengths to avoid relying on ftell.
+    pgn_index_cap = 512;
+    pgn_index = heap_caps_malloc(pgn_index_cap * sizeof(pgn_index_entry_t),
+                                 MALLOC_CAP_SPIRAM);
+    char *line = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM);
+    if (!pgn_index || !line) {
+        ESP_LOGE(TAG, "Failed to allocate PGN index");
+        if (pgn_index) { heap_caps_free(pgn_index); pgn_index = NULL; }
+        if (line) heap_caps_free(line);
+        pgn_index_cap = 0;
+        fclose(file);
+        return NULL;
+    }
+
+    long offset = 0;
+    long last_brace = -1;
+    while (fgets(line, 1024, file)) {
+        size_t llen = strlen(line);
+        const char *s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        if (*s == '{') last_brace = offset;
+
+        char *p = strstr(line, "\"PGN\":");
+        if (p && last_brace >= 0) {
+            if (pgn_index_count == pgn_index_cap) {
+                int new_cap = pgn_index_cap * 2;
+                pgn_index_entry_t *ni = heap_caps_realloc(
+                    pgn_index, new_cap * sizeof(pgn_index_entry_t),
+                    MALLOC_CAP_SPIRAM);
+                if (!ni) break; // keep what we have
+                pgn_index = ni;
+                pgn_index_cap = new_cap;
+            }
+            pgn_index[pgn_index_count].pgn = atoi(p + 6);
+            pgn_index[pgn_index_count].offset = last_brace;
+            pgn_index[pgn_index_count].def = NULL;
+            pgn_index_count++;
+        }
+        offset += (long)llen;
+    }
+    heap_caps_free(line);
+
+    if (pgn_index_count == 0) {
+        ESP_LOGE(TAG, "No PGN entries found in %s", filepath);
+        heap_caps_free(pgn_index);
+        pgn_index = NULL;
+        pgn_index_cap = 0;
+        fclose(file);
+        return NULL;
+    }
+
+    // Keep the file open for fast seeks during lookups.
+    pgn_db_file = file;
 
     if (pgn_db_path) {
         free(pgn_db_path);
     }
     pgn_db_path = strdup(filepath);
 
-    ESP_LOGI(TAG, "PGN database path set: %s (On-demand streaming enabled)", filepath);
-    
+    ESP_LOGI(TAG, "PGN index built: %d entries from %s", pgn_index_count, filepath);
+
     // Return a dummy non-NULL pointer to satisfy the caller
-    return (cJSON*)pgn_db_path; 
+    return (cJSON*)pgn_db_path;
 }
 
-static char *find_json_object_in_file(const char *filepath, const char *search_pattern)
+// Read the JSON object that begins at brace_offset (the position of its '{')
+// and return a heap_caps-allocated copy. Caller must hold pgn_db_mutex.
+static char *read_object_at_offset(long brace_offset)
 {
-    FILE *file = fopen(filepath, "r");
-    if (!file) return NULL;
+    if (!pgn_db_file || brace_offset < 0) return NULL;
+    if (fseek(pgn_db_file, brace_offset, SEEK_SET) != 0) return NULL;
 
-    const size_t chunk_size = 4096;
-    const size_t overlap = 128; // To handle patterns split across chunks
-    char *chunk = heap_caps_malloc(chunk_size + 1, MALLOC_CAP_SPIRAM);
-    if (!chunk) {
-        fclose(file);
-        return NULL;
-    }
+    size_t cap = 2048;
+    size_t len = 0;
+    char *out = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+    if (!out) return NULL;
 
-    long found_offset = -1;
-    size_t bytes_read;
-    long current_offset = 0;
-
-    while ((bytes_read = fread(chunk, 1, chunk_size, file)) > 0) {
-        chunk[bytes_read] = '\0';
-        char *p = strstr(chunk, search_pattern);
-        if (p) {
-            found_offset = current_offset + (p - chunk);
-            break;
-        }
-        
-        // Move back slightly for overlap, unless we reached EOF
-        if (bytes_read == chunk_size) {
-            fseek(file, -overlap, SEEK_CUR);
-            current_offset += (chunk_size - (long)overlap);
-        } else {
-            current_offset += (long)bytes_read;
-        }
-    }
-
-    if (found_offset == -1) {
-        heap_caps_free(chunk);
-        fclose(file);
-        return NULL;
-    }
-
-    // Found the pattern. Now find the enclosing { }
-    // Backtrack to find '{'
-    fseek(file, found_offset, SEEK_SET);
-    int c;
-    long start_pos = found_offset;
-    while (start_pos > 0) {
-        fseek(file, --start_pos, SEEK_SET);
-        c = fgetc(file);
-        if (c == '{') break;
-    }
-
-    // Now read forward to find matching '}'
-    fseek(file, start_pos, SEEK_SET);
     int brace_depth = 0;
     bool in_string = false;
-    long end_pos = start_pos;
-    
-    while ((c = fgetc(file)) != EOF) {
-        end_pos++;
+    bool done = false;
+    int c;
+    while ((c = fgetc(pgn_db_file)) != EOF) {
+        if (len + 1 >= cap) {
+            if (cap >= 16384) break; // Safety limit
+            size_t new_cap = cap * 2;
+            char *nb = heap_caps_realloc(out, new_cap, MALLOC_CAP_SPIRAM);
+            if (!nb) { heap_caps_free(out); return NULL; }
+            out = nb;
+            cap = new_cap;
+        }
+        out[len++] = (char)c;
         if (c == '"') {
             in_string = !in_string;
         } else if (!in_string) {
             if (c == '{') brace_depth++;
             else if (c == '}') {
                 brace_depth--;
-                if (brace_depth == 0) break;
+                if (brace_depth == 0) { done = true; break; }
             }
         }
-        if (end_pos - start_pos > 16384) break; // Safety limit
     }
 
-    size_t obj_size = end_pos - start_pos;
-    char *obj_buf = heap_caps_malloc(obj_size + 1, MALLOC_CAP_SPIRAM);
-    if (obj_buf) {
-        fseek(file, start_pos, SEEK_SET);
-        fread(obj_buf, 1, obj_size, file);
-        obj_buf[obj_size] = '\0';
-    }
+    if (!done) { heap_caps_free(out); return NULL; }
+    out[len] = '\0';
+    return out;
+}
 
+// Scan the open DB file from the start for search_pattern and return the byte
+// offset of the first match (or -1). Used only by the rare by-id path.
+// Caller must hold pgn_db_mutex.
+static long find_pattern_offset(const char *search_pattern)
+{
+    if (!pgn_db_file) return -1;
+    if (fseek(pgn_db_file, 0, SEEK_SET) != 0) return -1;
+
+    const size_t chunk_size = 4096;
+    const size_t overlap = 128; // handle patterns split across chunks
+    char *chunk = heap_caps_malloc(chunk_size + 1, MALLOC_CAP_SPIRAM);
+    if (!chunk) return -1;
+
+    long found = -1;
+    long base = 0;
+    size_t bytes_read;
+    while ((bytes_read = fread(chunk, 1, chunk_size, pgn_db_file)) > 0) {
+        chunk[bytes_read] = '\0';
+        char *p = strstr(chunk, search_pattern);
+        if (p) { found = base + (p - chunk); break; }
+        if (bytes_read == chunk_size) {
+            fseek(pgn_db_file, -(long)overlap, SEEK_CUR);
+            base += (long)(chunk_size - overlap);
+        } else {
+            base += (long)bytes_read;
+        }
+    }
     heap_caps_free(chunk);
-    fclose(file);
-    return obj_buf;
+    return found;
 }
 
 cJSON *pgn_get_definition(cJSON *pgn_db, int pgn_number)
@@ -158,42 +245,53 @@ cJSON *pgn_get_definition(cJSON *pgn_db, int pgn_number)
         return NULL;
     }
 
-    // Check cache
-    if (pgn_number == cached_pgn_number && cached_pgn_json) {
-        cJSON *res = cached_pgn_json;
-        xSemaphoreGive(pgn_db_mutex);
-        return res;
+    // Find this PGN's index entry.
+    pgn_index_entry_t *entry = NULL;
+    for (int i = 0; i < pgn_index_count; i++) {
+        if (pgn_index[i].pgn == pgn_number) { entry = &pgn_index[i]; break; }
     }
-
-    // Clear old cache
-    if (cached_pgn_json) {
-        cJSON_Delete(cached_pgn_json);
-        cached_pgn_json = NULL;
-        cached_pgn_number = -1;
-    }
-
-    // Search in file
-    char search_str[32];
-    snprintf(search_str, sizeof(search_str), "\"PGN\": %d", pgn_number);
-    
-    char *json_str = find_json_object_in_file(pgn_db_path, search_str);
-    if (!json_str) {
+    if (!entry) {
         xSemaphoreGive(pgn_db_mutex);
         return NULL;
     }
 
+    // Cache hit: the definition was already parsed on a previous lookup.
+    if (entry->def) {
+        cJSON *res = entry->def;
+        xSemaphoreGive(pgn_db_mutex);
+        return res;
+    }
+
+    // Miss: read just this object from the file and parse it.
+    char *json_str = read_object_at_offset(entry->offset);
+    if (!json_str) {
+        xSemaphoreGive(pgn_db_mutex);
+        return NULL;
+    }
     cJSON *pgn_obj = cJSON_Parse(json_str);
     heap_caps_free(json_str);
-
     if (!pgn_obj) {
         xSemaphoreGive(pgn_db_mutex);
         return NULL;
     }
 
-    cached_pgn_number = pgn_number;
-    cached_pgn_json = pgn_obj;
+    // Cache it permanently if we are under the cap; otherwise keep it only in a
+    // single scratch slot (freed on the next over-cap miss) to bound memory.
+    cJSON *res;
+    if (cached_def_count < PGN_DEF_CACHE_CAP) {
+        entry->def = pgn_obj;
+        cached_def_count++;
+        if (cached_def_count == PGN_DEF_CACHE_CAP) {
+            ESP_LOGW(TAG, "PGN definition cache full (%d); further PGNs re-read each time",
+                     PGN_DEF_CACHE_CAP);
+        }
+        res = pgn_obj;
+    } else {
+        if (uncached_scratch) cJSON_Delete(uncached_scratch);
+        uncached_scratch = pgn_obj;
+        res = pgn_obj;
+    }
 
-    cJSON *res = cached_pgn_json;
     xSemaphoreGive(pgn_db_mutex);
     return res;
 }
@@ -223,11 +321,22 @@ cJSON *pgn_get_definition_by_id(cJSON *pgn_db, const char *pgn_id)
         cached_pgn_id = NULL;
     }
 
-    // Search for "Id": "pgn_id"
+    // Search for "Id": "pgn_id", then map the match back to the enclosing
+    // object via the offset index (largest object offset <= match offset).
     char search_str[128];
     snprintf(search_str, sizeof(search_str), "\"Id\": \"%s\"", pgn_id);
-    
-    char *json_str = find_json_object_in_file(pgn_db_path, search_str);
+
+    long pat_off = find_pattern_offset(search_str);
+    long obj_off = -1;
+    if (pat_off >= 0) {
+        for (int i = 0; i < pgn_index_count; i++) {
+            if (pgn_index[i].offset <= pat_off && pgn_index[i].offset > obj_off) {
+                obj_off = pgn_index[i].offset;
+            }
+        }
+    }
+
+    char *json_str = (obj_off >= 0) ? read_object_at_offset(obj_off) : NULL;
     if (!json_str) {
         xSemaphoreGive(pgn_db_mutex);
         return NULL;

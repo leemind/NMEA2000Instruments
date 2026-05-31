@@ -1,26 +1,6 @@
 /*****************************************************************************
- * | File       :   main.c
- * | Author     :   Waveshare team
- * | Function   :   Main function
- * | Info       :
- * |                UI Design：
- *                          1. User Login and Creation: Users can log in or
- *create new accounts, and the created users are saved to NVS, so data is not
- *lost after power-down.
- *                          2. Wi-Fi: Can connect to Wi-Fi and start an access
- *point (hotspot).
- *                          3. RS485: Can send and receive data, with data
- *displayed on the screen.
- *                          4. PWM: Can modify PWM output in multiple ways to
- *control screen brightness. Additionally, it can display information from a
- *Micro SD card.
- *                          5. CAN: Can send and receive data, with data
- *displayed on the screen.
- *----------------
- * | Version    :   V1.0
- * | Date       :   2025-05-08
- * | Info       :   Basic version
- *
+
+ 
  ******************************************************************************/
 #include "can.h"          // Header for CAN communication
 #include "can_debug_ui.h" // Header for dynamic CAN Debug UI init
@@ -147,5 +127,8 @@ void app_main() {
   ota_init();
 
   // Start the CAN task
+
+  esp_log_level_set("CAN_DECODER", ESP_LOG_WARN); // Set default log level to WARN to reduce verbosity
+
   xTaskCreatePinnedToCore(can_task, "can_task", 6 * 1024, NULL, 15, &can_TaskHandle, 0);
 }

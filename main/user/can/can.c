@@ -46,6 +46,14 @@ cJSON *pgn_database = NULL;    // Global PGN database
 static const char *TAG = "CAN_DECODER";
 static bool g_can_paused = false;
 
+// CAN error/state reporting deferred out of ISR context (ESP_LOG is not
+// ISR-safe in ESP-IDF v6.0 — taking the stdio recursive mutex from an ISR
+// aborts in locks.c). The ISR callbacks only stash these; can_task logs them.
+static volatile uint32_t g_can_err_count   = 0;   // incremented in ISR
+static volatile uint8_t  g_can_last_errbits = 0;   // packed err_flags snapshot
+static volatile int8_t   g_can_new_state    = -1;  // -1 = none pending
+static volatile int8_t   g_can_old_state    = -1;
+
 /* Forward declaration — defined later in this file */
 static void img_angle_anim_cb(void *obj, int32_t angle);
 
@@ -751,18 +759,23 @@ void can_update_textarea_cb(lv_timer_t *timer) {
 static bool twai_error_cb(twai_node_handle_t handle,
                           const twai_error_event_data_t *edata,
                           void *user_ctx) {
-  ESP_LOGW(TAG, "CAN Error: arb_lost=%d, bit=%d, form=%d, stuff=%d, ack=%d",
-           (int)edata->err_flags.arb_lost, (int)edata->err_flags.bit_err,
-           (int)edata->err_flags.form_err, (int)edata->err_flags.stuff_err,
-           (int)edata->err_flags.ack_err);
+  // ISR context: do NOT log here. Stash a snapshot; can_task reports it.
+  uint8_t bits = (edata->err_flags.arb_lost  ? 0x01 : 0)
+               | (edata->err_flags.bit_err   ? 0x02 : 0)
+               | (edata->err_flags.form_err  ? 0x04 : 0)
+               | (edata->err_flags.stuff_err ? 0x08 : 0)
+               | (edata->err_flags.ack_err   ? 0x10 : 0);
+  g_can_last_errbits = bits;
+  g_can_err_count++;
   return false;
 }
 
 static bool twai_state_cb(twai_node_handle_t handle,
                           const twai_state_change_event_data_t *edata,
                           void *user_ctx) {
-  const char *st[] = {"Active", "Warning", "Passive", "Bus-Off"};
-  ESP_LOGI(TAG, "CAN State: %s -> %s", st[edata->old_sta], st[edata->new_sta]);
+  // ISR context: do NOT log here. Stash the transition; can_task reports it.
+  g_can_old_state = (int8_t)edata->old_sta;
+  g_can_new_state = (int8_t)edata->new_sta;
   return false;
 }
 
@@ -904,6 +917,30 @@ void can_task(void *arg) {
         }
       }
       last_status_log_ms = now_ms;
+    }
+
+    // Report deferred CAN error/state changes (throttled) — safe here in task
+    // context, not in the ISR callbacks where ESP_LOG would abort.
+    static int64_t last_err_log_us = 0;
+    static uint32_t last_err_count_seen = 0;
+    if (g_can_new_state >= 0) {
+      static const char *st[] = {"Active", "Warning", "Passive", "Bus-Off"};
+      int8_t os = g_can_old_state, ns = g_can_new_state;
+      if (os >= 0 && os < 4 && ns >= 0 && ns < 4) {
+        ESP_LOGI(TAG, "CAN State: %s -> %s", st[os], st[ns]);
+      }
+      g_can_new_state = -1;
+    }
+    uint32_t errc = g_can_err_count;
+    int64_t now_us = esp_timer_get_time();
+    if (errc != last_err_count_seen && (now_us - last_err_log_us) > 1000000) {
+      uint8_t b = g_can_last_errbits;
+      ESP_LOGW(TAG,
+               "CAN errors: %u total (arb=%d bit=%d form=%d stuff=%d ack=%d)",
+               (unsigned)errc, !!(b & 0x01), !!(b & 0x02), !!(b & 0x04),
+               !!(b & 0x08), !!(b & 0x10));
+      last_err_count_seen = errc;
+      last_err_log_us = now_us;
     }
 
     // Wait for a message to arrive in the queue (block up to 100ms)
