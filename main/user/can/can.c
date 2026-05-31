@@ -418,6 +418,45 @@ static void handle_pgn_dynamic(cJSON *pgn_def, uint32_t pgn, const uint8_t *data
  * @param data     Raw CAN data payload bytes
  * @param data_len Number of payload bytes
  */
+/* -----------------------------------------------------------------------
+ * Apparent Wind Angle dampener.
+ *
+ * Smooths a jumpy AWA using a recency-weighted moving average of the last
+ * AWA_FILTER_LEN samples (newest sample has the highest weight). Wind angle is
+ * circular (0/360 wrap), so we average the unit vectors (sin/cos) rather than
+ * the raw degrees — averaging 359° and 1° must yield 0°, not 180°.
+ * Called only from the CAN task, so no extra locking is needed.
+ * -------------------------------------------------------------------- */
+#define AWA_FILTER_LEN 20
+static float s_awa_sin[AWA_FILTER_LEN];
+static float s_awa_cos[AWA_FILTER_LEN];
+static int   s_awa_count = 0; /* valid samples so far (ramps up to LEN) */
+static int   s_awa_head = -1; /* ring index of the most recent sample   */
+
+static float damp_awa(float awa_deg) {
+  float rad = awa_deg * ((float)M_PI / 180.0f);
+  s_awa_head = (s_awa_head + 1) % AWA_FILTER_LEN;
+  s_awa_sin[s_awa_head] = sinf(rad);
+  s_awa_cos[s_awa_head] = cosf(rad);
+  if (s_awa_count < AWA_FILTER_LEN)
+    s_awa_count++;
+
+  /* Weight the i-th most recent sample (i=0 newest) by (count - i): newest
+   * gets the largest weight, oldest gets 1. */
+  float sum_sin = 0.0f, sum_cos = 0.0f;
+  for (int i = 0; i < s_awa_count; i++) {
+    int idx = (s_awa_head - i + AWA_FILTER_LEN) % AWA_FILTER_LEN;
+    float w = (float)(s_awa_count - i);
+    sum_sin += w * s_awa_sin[idx];
+    sum_cos += w * s_awa_cos[idx];
+  }
+
+  float deg = atan2f(sum_sin, sum_cos) * (180.0f / (float)M_PI);
+  if (deg < 0.0f)
+    deg += 360.0f;
+  return deg;
+}
+
 static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) {
   if (!pgn_def)
     return;
@@ -510,6 +549,11 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
     float angle_deg = (float)angle_rad * (180.0f / (float)M_PI);
     while (angle_deg >= 360.0f)
       angle_deg -= 360.0f;
+
+    /* Dampen the (often jumpy) raw AWA. All downstream uses — the AWA label,
+     * the ApparantPointer animation, and the True Wind computation — work from
+     * this smoothed value. */
+    angle_deg = damp_awa(angle_deg);
 
     // ESP_LOGI("CAN_DL","Wind Angle %f",angle_deg);
     /* Speed string: 1 decimal place */

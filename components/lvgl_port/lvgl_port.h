@@ -13,14 +13,22 @@
  */
 #define LVGL_PORT_H_RES (1024)
 #define LVGL_PORT_V_RES (600)
-#define LVGL_PORT_TICK_PERIOD_MS (2)
+#define LVGL_PORT_TICK_PERIOD_MS (1)
 
 /**
  * LVGL timer handle task related parameters, can be adjusted by users
  *
  */
+// Idle poll cap for the LVGL task. LVGL's refresh and animation timers pause
+// themselves when idle, so when nothing is on-screen-changing lv_timer_handler
+// reports "no timer ready" and the task would otherwise sleep this long. When
+// another task (e.g. can_task) starts an animation it resumes those timers but
+// CANNOT wake this task early from vTaskDelay — so a long cap means a 150-600ms
+// pointer animation can fully elapse during the sleep and render only its final
+// frame (a visible "jump"). Keep this at the ~30ms refresh period so animations
+// driven by sporadic (e.g. ~1Hz) CAN data are picked up and stepped smoothly.
 #define LVGL_PORT_TASK_MAX_DELAY_MS                                            \
-  (500) // The maximum delay of the LVGL timer task, in milliseconds
+  (30) // The maximum delay of the LVGL timer task, in milliseconds
 #define LVGL_PORT_TASK_MIN_DELAY_MS                                            \
   (10) // The minimum delay of the LVGL timer task, in milliseconds
 #define LVGL_PORT_TASK_STACK_SIZE                                              \
