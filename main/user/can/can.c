@@ -108,17 +108,18 @@ static void compute_true_wind(void) {
   if (!g_aws_valid || !g_awa_valid || !g_sog_valid)
     return;
 
-  /* Convert AWA to signed radians: port = +, starboard = - */
+  float g_sog_ms = g_sog_kts * 0.5144; // Convert SOG to m/s for calculation
+  /* Convert AWA to signed radians: port = -, starboard = + */
   float awa_signed_deg = g_awa_deg;
   if (awa_signed_deg > 180.0f)
     awa_signed_deg -= 360.0f;
   float awa_rad = awa_signed_deg * ((float)M_PI / 180.0f);
 
   float tw_x = g_aws_ms * sinf(awa_rad);
-  float tw_y = g_aws_ms * cosf(awa_rad) - g_sog_kts;
+  float tw_y = g_aws_ms * cosf(awa_rad) - g_sog_ms;
 
   float tws = sqrtf(tw_x * tw_x + tw_y * tw_y);
-  float twa_rad = atan2f(tw_x, tw_y); /* signed: + = port */
+  float twa_rad = atan2f(tw_x, tw_y); /* signed: - = port */
   float twa_deg = twa_rad * (180.0f / (float)M_PI);
 
   /* Normalise TWA to 0-360 (port side 0-180, starboard 180-360) */
@@ -142,9 +143,9 @@ static void compute_true_wind(void) {
     else if (strcmp(cfg->field1_id, "TWA") == 0) {
       char twa_buf[10];
       if (twa_deg < 180.0f) {
-        snprintf(twa_buf, sizeof(twa_buf), "P %03.0f", twa_deg);
+        snprintf(twa_buf, sizeof(twa_buf), "S %03.0f", twa_deg);
       } else {
-        snprintf(twa_buf, sizeof(twa_buf), "S %03.0f", 360.0f - twa_deg);
+        snprintf(twa_buf, sizeof(twa_buf), "P %03.0f", 360.0f - twa_deg);
       }
       if (g_databox_ui[i].value) lv_label_set_text(g_databox_ui[i].value, twa_buf);
     }
@@ -152,7 +153,7 @@ static void compute_true_wind(void) {
 
   /* Rotate TruePointer — same formula and animation as ApparantPointer */
   if (ui_TruePointer) {
-    int32_t tgt = (int32_t)((360.0f - twa_deg) * 10.0f);
+    int32_t tgt = (int32_t)((twa_deg) * 10.0f);
     tgt = ((tgt % 3600) + 3600) % 3600;
 
     int32_t cur = (int32_t)lv_img_get_angle(ui_TruePointer);
@@ -295,13 +296,6 @@ static double get_pgn_field_value(cJSON *pgn_def, const uint8_t *data,
     }
   }
   return NAN;
-}
-
-/**
- * @brief Handle computed values (TWS/TWA) if configured
- */
-static void handle_computed_databoxes(void) {
-    compute_true_wind();
 }
 
 static double convert_unit(double value, const char *from, const char *to) {
@@ -517,18 +511,19 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
     while (angle_deg >= 360.0f)
       angle_deg -= 360.0f;
 
+    // ESP_LOGI("CAN_DL","Wind Angle %f",angle_deg);
     /* Speed string: 1 decimal place */
     char spd_buf[8];
     snprintf(spd_buf, sizeof(spd_buf), "%.1f",
              speed_ms * wind_convert[settings.wind_unit]);
 
-    /* Angle string: P xxx (port, < 180°) or S yyy (starboard, ≥ 180°)
-     * For starboard the displayed angle is the mirror: 360 - angle */
+    /* Angle string: P xxx (port, > 180°) or S yyy (starboard, < 180°)
+     * For port the displayed angle is the mirror: 360 - angle */
     char ang_buf[10];
     if (angle_deg < 180.0f) {
-      snprintf(ang_buf, sizeof(ang_buf), "P %03.0f", angle_deg);
+      snprintf(ang_buf, sizeof(ang_buf), "S %03.0f", angle_deg);
     } else {
-      snprintf(ang_buf, sizeof(ang_buf), "S %03.0f", 360.0f - angle_deg);
+      snprintf(ang_buf, sizeof(ang_buf), "P %03.0f", 360.0f - angle_deg);
     }
 
     /* Cache apparent wind for True Wind computation */
@@ -546,10 +541,10 @@ static void handle_pgn_fixed(cJSON *pgn_def, const uint8_t *data, int data_len) 
       }
 
       if (ui_ApparantPointer) {
-        /* Pointer target: same formula as compass rose —
-         * (360 - angle) degrees clockwise puts dead-ahead at 12 o'clock,
+        /* Pointer target: 
+         * 0 puts dead-ahead at 12 o'clock,
          * port wind swings the pointer left, starboard swings it right. */
-        int32_t ptr_target = (int32_t)((360.0f - angle_deg) * 10.0f);
+        int32_t ptr_target = (int32_t)((angle_deg) * 10.0f);
         ptr_target = ((ptr_target % 3600) + 3600) % 3600;
 
         int32_t ptr_current = (int32_t)lv_img_get_angle(ui_ApparantPointer);
